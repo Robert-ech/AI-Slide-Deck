@@ -1,0 +1,14 @@
+node_modules/
+.next/
+data/
+reports/
+exports/
+*.sqlite
+*.sqlite-*
+.env
+.env.*
+!.env.example
+*.log
+tsconfig.tsbuildinfo
+.DS_Store
+.playwright-cli/
