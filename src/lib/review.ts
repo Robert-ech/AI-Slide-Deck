@@ -6,6 +6,7 @@ export function sourceIsReviewed(source: Source): boolean {
 }
 
 export function reviewProblem(insights: Insight[], sources: Source[]): string | null {
+  if (!insights.length) return "Add at least one source-backed insight before marking the memo reviewed.";
   const byId = new Map(sources.map((source) => [source.id, source]));
   for (const insight of insights) {
     if (!insight.reviewed) return "Review every insight before marking the memo reviewed.";

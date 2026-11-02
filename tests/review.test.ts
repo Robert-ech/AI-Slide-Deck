@@ -15,6 +15,7 @@ test("filings are primary evidence; analyst-added sources need explicit review",
 });
 
 test("memo review rejects missing citations and unchecked insights", () => {
+  assert.match(reviewProblem([], [filing])!, /at least one source-backed insight/);
   assert.match(reviewProblem([{ ...insight, reviewed: false }], [article])!, /every insight/);
   assert.match(reviewProblem([{ ...insight, evidenceIds: [] }], [article])!, /source citation/);
   assert.match(reviewProblem([{ ...insight, evidenceIds: ["missing"] }], [article])!, /unknown source/);
