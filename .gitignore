@@ -3,6 +3,7 @@ node_modules/
 data/
 reports/
 exports/
+output/
 *.sqlite
 *.sqlite-*
 .env

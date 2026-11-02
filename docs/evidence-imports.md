@@ -28,3 +28,9 @@ Submit `agency` (`Moody's`, `S&P`, `Fitch`, or `Other`), the grade in `rating`, 
 Submit `csv` as the text of a single-query Google Trends export, plus `query`, `geography` (the exact label in the CSV), `periodStart`, `periodEnd`, `retrievedAt` (`YYYY-MM-DD`), `reviewed`, and a public `source` link on `https://trends.google.com/trends/...`. A client can read the chosen file with `File.text()` and send its contents in JSON. The original CSV is **not persisted**; only parsed relative-index observations and metadata are saved.
 
 The query and geography must match the CSV header. `periodStart` and `periodEnd` must match the first and last observation boundaries, including a full week, month, or year when those are the export's units. Dates must ascend and retrieval cannot be in the future. Google indexes must be integers from 0 to 100. The export token `<1` is stored as `null` with an explanation rather than converted to a made-up value. Unreviewed or insufficient series display N/A.
+
+## Industry context
+
+The workbench includes a public industry-context form. Enter a concise analysis, public HTTPS source URL, source title, publication date, and analyst review acknowledgement. The source is recorded as analyst supplied and the memo returns to draft. The form does not retrieve or verify the linked page, so inspect the publication and confirm that the analysis fairly represents it before submitting.
+
+The licensed IBISWorld path remains separate and requires confirmed account permission. If neither source is available, page 2 shows N/A with a reason.
