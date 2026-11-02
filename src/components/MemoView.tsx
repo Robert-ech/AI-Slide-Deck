@@ -13,7 +13,16 @@ function money(value: number | null): string {
 function metricValue(metric?: Metric): string {
   if (!metric || metric.value === null) return "N/A";
   if (metric.unit === "USD") return money(metric.value);
-  return metric.unit === "percent" ? `${metric.value.toFixed(1)}%` : `${metric.value.toFixed(2)}×`;
+  if (metric.unit === "percent") return `${metric.value.toFixed(1)}%`;
+  if (metric.unit === "days") return `${metric.value.toFixed(1)} days`;
+  return `${metric.value.toFixed(2)}×`;
+}
+
+function excerpt(text: string, maxLength = 250): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  const wordEnd = compact.lastIndexOf(" ", maxLength);
+  return `${compact.slice(0, wordEnd > maxLength * .6 ? wordEnd : maxLength)}…`;
 }
 
 function factSources(ids: string[], facts: FinancialFact[]): string[] {
@@ -119,7 +128,7 @@ export default function MemoView({ memo }: { memo: Memo }) {
               {bucket.junior !== null && bucket.junior > 0 && <i className="maturity-junior" style={{ height: `${bucket.junior / total * 100}%` }} />}
               {bucket.senior !== null && bucket.senior > 0 && <i className="maturity-senior" style={{ height: `${bucket.senior / total * 100}%` }} />}
             </div><span>{bucket.label}</span></div>;
-          })}</div><div className="dossier-maturity-legend"><span><i className="maturity-senior" /> Senior</span><span><i className="maturity-junior" /> Junior</span><span><i className="maturity-unclassified" /> Unclassified</span></div><p className="dossier-panel-note">{maturity!.basis} · USD millions <Citation ids={[maturity!.sourceId]} sources={memo.sources} /></p></> : <p className="dossier-panel-note dossier-empty-panel"><b>N/A</b> · {memo.debtMaturities ? "Imported maturity schedule awaits analyst review or has no usable buckets." : "No reviewed, source-linked debt maturity schedule has been imported."}</p>}
+          })}</div><div className="dossier-maturity-legend"><span><i className="maturity-senior" /> Senior</span><span><i className="maturity-junior" /> Junior</span><span><i className="maturity-unclassified" /> Unclassified</span></div><p className="dossier-panel-note">{maturity!.basis} · USD millions <Citation ids={[maturity!.sourceId]} sources={memo.sources} />{maturity!.note && <span className="dossier-maturity-note">{maturity!.note}</span>}</p></> : <p className="dossier-panel-note dossier-empty-panel"><b>N/A</b> · {memo.debtMaturities ? "Imported maturity schedule awaits analyst review or has no usable buckets." : "No reviewed, source-linked debt maturity schedule has been imported."}</p>}
         </section>
       </div>
       <section className="dossier-panel trends-panel" aria-label="Google Trends search interest"><div><span>04 / EXTERNAL SIGNAL</span><h3>Google search interest</h3>{trends && usableTrendPoints.length >= 2 ? <p>Query “{trends.query}” · {trends.geography} · {trends.periodStart} to {trends.periodEnd} · retrieved {trends.retrievedAt}. Relative search interest, indexed 0–100. <Citation ids={[trends.sourceId]} sources={memo.sources} /></p> : <p><b>N/A</b> · {memo.googleTrends ? "Imported Google Trends data awaits review or lacks two usable observations." : "No reviewed Google Trends export has been imported."}</p>}</div>
@@ -136,7 +145,7 @@ export default function MemoView({ memo }: { memo: Memo }) {
         <section className="dossier-narrative-section"><span>02</span><h3>Credit view &amp; risks</h3>{credit.length ? credit.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} />{!insight.reviewed && <small className="dossier-draft-tag">Draft · analyst review pending</small>}</p>) : <p>N/A · Source-backed credit and risk observations are pending.</p>}</section>
       </div>
       <div className="dossier-followup"><div><span>OPPORTUNITIES / FOLLOW-UP</span><h3>Growth signals to test</h3></div><div>{growth.length ? growth.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} />{!insight.reviewed && <small className="dossier-draft-tag">Draft · analyst review pending</small>}</p>) : <p>N/A · No source-backed opportunity or growth signal has been reviewed. Test commercial upside separately before drawing a conclusion.</p>}</div></div>
-      <div className="dossier-context-grid"><section><span>INDUSTRY CONTEXT</span>{memo.industry && industrySource ? <p>{memo.industry.summary} <Citation ids={[industrySource.id]} sources={memo.sources} /><small>{industrySource.access === "licensed" ? "Licensed reference · local use only" : "Public reference"}{memo.industry.publicationDate ? ` · ${memo.industry.publicationDate}` : ""}</small></p> : <p>N/A · No attributable industry analysis has been added.</p>}</section><section><span>DATED PUBLIC EVIDENCE</span>{datedPublicEvidence.length ? datedPublicEvidence.map((source) => <p key={source.id}>{source.publishedAt} · {source.title} <Citation ids={[source.id]} sources={memo.sources} />{source.reviewed !== true && <small>Source review pending</small>}</p>) : <p>N/A · No dated public news or company release has been added.</p>}</section></div>
+      <div className="dossier-context-grid"><section><span>INDUSTRY CONTEXT</span>{memo.industry && industrySource ? <p>{excerpt(memo.industry.summary)} <Citation ids={[industrySource.id]} sources={memo.sources} /><small>Summary excerpt · {industrySource.access === "licensed" ? "licensed reference, local use only" : "public reference"}{memo.industry.publicationDate ? ` · ${memo.industry.publicationDate}` : ""}</small></p> : <p>N/A · No attributable industry analysis has been added.</p>}</section><section><span>DATED PUBLIC EVIDENCE</span>{datedPublicEvidence.length ? datedPublicEvidence.map((source) => <p key={source.id}>{source.publishedAt} · {source.title} <Citation ids={[source.id]} sources={memo.sources} />{source.reviewed !== true && <small>Source review pending</small>}</p>) : <p>N/A · No dated public news or company release has been added.</p>}</section></div>
       <section className="dossier-source-section"><div className="dossier-section-title"><span>06 / SOURCE REGISTER</span><p>Every numbered reference used in this draft</p></div><ol>{citedSources.map((source) => <li key={source.id}><span>[{memo.sources.indexOf(source) + 1}]</span><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><small>{source.publishedAt ?? "Date N/A"} · {source.access}</small></li>)}</ol>{!citedSources.length && <p className="dossier-empty-data">N/A · No valid source references are attached.</p>}</section>
     </PageFrame>
   </div>;

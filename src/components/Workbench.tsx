@@ -6,8 +6,32 @@ import type { Insight, Memo, PublicSourceInput, Source } from "@/lib/types";
 
 type Saved = Pick<Memo, "id" | "generatedAt" | "company" | "reviewStatus">;
 type NewsCandidate = { title: string; url: string; publishedAt: string; domain: string };
+type MaturityRow = { label: string; fiscalYear: string; senior: string; junior: string; unclassified: string };
 
 const blankSource = (): PublicSourceInput => ({ title: "", url: "", publishedAt: "", note: "", kind: "public-news" });
+const blankMaturityRow = (): MaturityRow => ({ label: "", fiscalYear: "", senior: "", junior: "", unclassified: "" });
+
+function EvidenceSourceFields({ publicOnly = false }: { publicOnly?: boolean }) {
+  return <fieldset className="evidence-source-fields"><legend>Traceable source</legend>
+    <label>Title<input name="source-title" required minLength={3} maxLength={180} placeholder="Filing table or ratings page" /></label>
+    <label>HTTPS URL<input name="source-url" type="url" required pattern="https://.*" placeholder="https://…" /></label>
+    {!publicOnly && <label>Access<select name="source-access" defaultValue="public"><option value="public">Public</option><option value="licensed">Licensed · local use</option></select></label>}
+    <label>Publication date, if shown<input name="source-date" type="date" max={new Date().toISOString().slice(0, 10)} /></label>
+    <label>Source note<input name="source-note" maxLength={400} placeholder="Where the figure appears" /></label>
+  </fieldset>;
+}
+
+function importedSource(form: FormData, publicOnly = false) {
+  const publishedAt = String(form.get("source-date") ?? "");
+  const note = String(form.get("source-note") ?? "").trim();
+  return {
+    title: String(form.get("source-title") ?? "").trim(),
+    url: String(form.get("source-url") ?? "").trim(),
+    access: publicOnly ? "public" as const : String(form.get("source-access") ?? "public") as "public" | "licensed",
+    ...(publishedAt ? { publishedAt } : {}),
+    ...(note ? { note } : {}),
+  };
+}
 
 export default function Workbench() {
   const [ticker, setTicker] = useState("WMT");
@@ -25,6 +49,7 @@ export default function Workbench() {
   const [reportCode, setReportCode] = useState("");
   const [factsFile, setFactsFile] = useState<File | null>(null);
   const [submissionsFile, setSubmissionsFile] = useState<File | null>(null);
+  const [maturityRows, setMaturityRows] = useState<MaturityRow[]>([blankMaturityRow()]);
 
   const refreshSaved = useCallback(async () => {
     const response = await fetch("/api/memos");
@@ -158,6 +183,73 @@ export default function Workbench() {
     finally { setBusy(null); }
   }
 
+  async function importEvidence(kind: "maturities" | "ratings" | "trends", body: Record<string, unknown>): Promise<boolean> {
+    if (!memo) return false;
+    setBusy(`Importing ${kind}`); setError(null);
+    try {
+      const response = await fetch(`/api/memos/${memo.id}/${kind}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `${kind} import failed.`);
+      setMemo(result.memo);
+      setNotice(`${kind[0].toUpperCase()}${kind.slice(1)} imported. The memo remains a draft until its evidence is reviewed.`);
+      await refreshSaved();
+      return true;
+    } catch (caught) { setError(caught instanceof Error ? caught.message : `${kind} import failed.`); return false; }
+    finally { setBusy(null); }
+  }
+
+  async function importMaturities(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!memo) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const amount = (value: string) => value.trim() === "" ? null : Number(value);
+    const buckets = maturityRows.map((row) => ({
+      label: row.label.trim(), fiscalYear: row.fiscalYear.trim() === "" ? null : Number(row.fiscalYear),
+      senior: amount(row.senior), junior: amount(row.junior), unclassified: amount(row.unclassified),
+    }));
+    if (buckets.some((bucket) => !bucket.label || bucket.senior === null && bucket.junior === null && bucket.unclassified === null)) {
+      setError("Each maturity row needs a label and at least one reported amount. Leave an unknown split blank; enter 0 only when the source reports zero.");
+      return;
+    }
+    const imported = await importEvidence("maturities", {
+      ticker: memo.company.ticker, asOf: String(data.get("asOf") ?? ""), basis: String(data.get("basis") ?? ""),
+      currency: "USD", scale: "millions", reviewed: data.has("reviewed"), buckets, source: importedSource(data),
+    });
+    if (imported) { form.reset(); setMaturityRows([blankMaturityRow()]); }
+  }
+
+  async function importRating(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!memo) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const imported = await importEvidence("ratings", {
+      ticker: memo.company.ticker, agency: String(data.get("agency") ?? ""), rating: String(data.get("rating") ?? "").trim(),
+      scope: String(data.get("scope") ?? "").trim(), asOf: String(data.get("asOf") ?? ""), reviewed: data.has("reviewed"),
+      source: importedSource(data),
+    });
+    if (imported) form.reset();
+  }
+
+  async function importTrends(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!memo) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const file = data.get("csv");
+    if (!(file instanceof File) || !file.size) { setError("Choose a Google Trends CSV export first."); return; }
+    const imported = await importEvidence("trends", {
+      ticker: memo.company.ticker, csv: await file.text(), query: String(data.get("query") ?? "").trim(),
+      geography: String(data.get("geography") ?? "").trim(), periodStart: String(data.get("periodStart") ?? ""),
+      periodEnd: String(data.get("periodEnd") ?? ""), retrievedAt: String(data.get("retrievedAt") ?? ""),
+      reviewed: data.has("reviewed"), source: importedSource(data, true),
+    });
+    if (imported) form.reset();
+  }
+
   async function addIndustry() {
     if (!memo) return;
     setBusy("Loading industry context"); setError(null);
@@ -201,11 +293,14 @@ export default function Workbench() {
   function updateSource(index: number, field: keyof PublicSourceInput, value: string) {
     setSources((current) => current.map((source, itemIndex) => itemIndex === index ? { ...source, [field]: value } : source));
   }
+  function updateMaturityRow(index: number, field: keyof MaturityRow, value: string) {
+    setMaturityRows((current) => current.map((row, itemIndex) => itemIndex === index ? { ...row, [field]: value } : row));
+  }
   function sourceLabel(source: Source): string { return `${source.title}${source.publishedAt ? ` · ${source.publishedAt}` : ""}`; }
-  const reviewReady = memo?.insights.every((insight) => insight.reviewed && insight.evidenceIds.length > 0 && insight.evidenceIds.every((id) => {
+  const reviewReady = Boolean(memo?.insights.length) && (memo?.insights.every((insight) => insight.reviewed && insight.evidenceIds.length > 0 && insight.evidenceIds.every((id) => {
     const source = memo.sources.find((item) => item.id === id);
     return Boolean(source && (source.kind === "filing" && source.provenance !== "analyst-supplied" || source.reviewed === true));
-  })) ?? false;
+  })) ?? false);
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -262,7 +357,13 @@ export default function Workbench() {
 
       <aside className="right-rail"><div className="rail-card rail-summary"><span className="eyebrow">METHOD / 01</span><h3>Evidence before opinion.</h3><p>Every number keeps its filing trail. Commentary stays in draft until you check the underlying sources.</p><div className="rail-line"><span>FILINGS</span><b>{memo ? memo.sources.filter((source) => source.kind === "filing").length : "—"}</b></div><div className="rail-line"><span>PUBLIC SOURCES</span><b>{memo ? memo.sources.filter((source) => source.access === "public" && source.kind !== "filing").length : "—"}</b></div><div className="rail-line"><span>AI MODE</span><b>{memo ? memo.generationMode === "openai" ? "DRAFTED" : "LOCAL" : "—"}</b></div></div>
         {memo && <div className="rail-card"><span className="eyebrow">SOURCE REGISTER</span><h3>Trace the memo</h3><div className="source-register">{memo.sources.filter((source) => source.access === "public").slice(0, 20).map((source, index) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id}><span>[{memo.sources.indexOf(source) + 1}]</span><p>{sourceLabel(source)}</p><b>↗</b></a>)}</div></div>}
-        {memo && !memo.id.startsWith("pilot-") && <div className="rail-card industry-card"><span className="eyebrow">LICENSED INDUSTRY CONTEXT</span><h3>IBISWorld</h3><p>Choose a report code from your licensed account. This section remains local and is excluded from AI prompts.</p><div className="industry-form"><input value={reportCode} onChange={(event) => setReportCode(event.target.value)} placeholder="Report code" aria-label="IBISWorld report code" /><button onClick={addIndustry} disabled={Boolean(busy) || !reportCode.trim()}>Load</button></div>{memo.industry && <small>Connected: {memo.industry.reportTitle}</small>}</div>}
+        {memo && !memo.id.startsWith("pilot-") && <div className="rail-card evidence-card"><span className="eyebrow">SOURCE-LINKED INPUTS</span><h3>Complete the evidence</h3><p>Import only figures checked against the original document. Leave unknown debt splits blank; the memo will show N/A until an input is reviewed.</p>
+          <details><summary>Debt maturity schedule</summary><form onSubmit={(event) => void importMaturities(event)}><p>USD millions · scheduled principal, not carrying debt. Include every dated bucket and a final “Thereafter” row when reported.</p><label>As-of date<input name="asOf" type="date" required /></label><label>Schedule basis<input name="basis" required minLength={5} maxLength={240} placeholder="Scheduled principal payments" /></label>
+            <div className="maturity-editor"><span className="tiny-label">MATURITY BUCKETS</span>{maturityRows.map((row, index) => <div className="maturity-editor-row" key={index}><div><label>Label<input value={row.label} onChange={(event) => updateMaturityRow(index, "label", event.target.value)} required placeholder="2028 or Thereafter" /></label><label>Fiscal year<input value={row.fiscalYear} onChange={(event) => updateMaturityRow(index, "fiscalYear", event.target.value)} type="number" min="2000" max="2200" placeholder="Blank for Thereafter" /></label></div><div><label>Senior<input value={row.senior} onChange={(event) => updateMaturityRow(index, "senior", event.target.value)} type="number" min="0" step="any" placeholder="N/A" /></label><label>Junior<input value={row.junior} onChange={(event) => updateMaturityRow(index, "junior", event.target.value)} type="number" min="0" step="any" placeholder="N/A" /></label><label>Unclassified<input value={row.unclassified} onChange={(event) => updateMaturityRow(index, "unclassified", event.target.value)} type="number" min="0" step="any" placeholder="N/A" /></label></div>{maturityRows.length > 1 && <button type="button" className="evidence-remove" onClick={() => setMaturityRows((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove row</button>}</div>)}</div><button type="button" className="evidence-add" onClick={() => setMaturityRows((current) => [...current, blankMaturityRow()])}>+ Add maturity bucket</button><EvidenceSourceFields /><label className="evidence-verified"><input name="reviewed" type="checkbox" /> I checked the amounts and seniority against this source</label><button type="submit" disabled={Boolean(busy)}>Import maturity schedule</button></form></details>
+          <details><summary>Credit rating</summary><form onSubmit={(event) => void importRating(event)}><label>Agency<select name="agency" defaultValue="Moody's"><option>Moody&apos;s</option><option>S&amp;P</option><option>Fitch</option><option>Other</option></select></label><label>Grade<input name="rating" required maxLength={16} placeholder="A1" /></label><label>Scope<input name="scope" required minLength={3} maxLength={100} placeholder="Senior unsecured issuer" /></label><label>Rating as of<input name="asOf" type="date" required /></label><EvidenceSourceFields /><label className="evidence-verified"><input name="reviewed" type="checkbox" /> I checked the grade, scope, and date against this source</label><button type="submit" disabled={Boolean(busy)}>Import rating</button></form></details>
+          <details><summary>Google Trends export</summary><form onSubmit={(event) => void importTrends(event)}><p>Export one query from Google Trends. Query, geography, and dates must match the CSV.</p><label>CSV file<input name="csv" type="file" accept=".csv,text/csv" required /></label><label>Query<input name="query" required maxLength={100} placeholder="Walmart" /></label><label>Geography<input name="geography" required maxLength={100} placeholder="United States" /></label><label>Period start<input name="periodStart" type="date" required /></label><label>Period end<input name="periodEnd" type="date" required /></label><label>Retrieved on<input name="retrievedAt" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></label><EvidenceSourceFields publicOnly /><label className="evidence-verified"><input name="reviewed" type="checkbox" /> I checked the CSV against the stated query and period</label><button type="submit" disabled={Boolean(busy)}>Import Trends CSV</button></form></details>
+        </div>}
+        {memo && !memo.id.startsWith("pilot-") && <div className="rail-card industry-card"><span className="eyebrow">LICENSED INDUSTRY CONTEXT</span><h3>IBISWorld</h3><p>Choose a report code from your licensed account. This section remains local and is excluded from AI prompts.</p><div className="industry-form"><input value={reportCode} onChange={(event) => setReportCode(event.target.value)} placeholder="Report code" aria-label="IBISWorld report code" /><button onClick={addIndustry} disabled={Boolean(busy) || !reportCode.trim()}>Load</button></div>{memo.industry && <details className="industry-detail"><summary>Connected: {memo.industry.reportTitle}</summary><p>{memo.industry.summary}</p></details>}</div>}
         <div className="rail-card saved-card"><span className="eyebrow">LOCAL ARCHIVE</span><h3>Recent memos</h3>{saved.length ? saved.map((item) => <button key={item.id} onClick={() => openMemo(item.id)}><span><b>{item.company.ticker}</b><small>{new Date(item.generatedAt).toLocaleDateString()}</small></span><span>↗</span></button>) : <p>No memos yet. Generate the first pilot to begin.</p>}</div>
       </aside></div>
     </main>
