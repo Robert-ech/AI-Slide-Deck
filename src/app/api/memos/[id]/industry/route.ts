@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getMemo, saveMemo } from "@/lib/db";
 import { getIndustryContext } from "@/lib/ibisworld";
+import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const blocked = guardLocalMutation(request, "json");
+  if (blocked) return blocked;
   try {
     const { id } = await context.params;
     const memo = getMemo(id);
@@ -13,7 +16,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const { reportCode } = z.object({ reportCode: z.string().min(2).max(24) }).parse(await request.json());
     const industry = await getIndustryContext(reportCode);
     memo.industry = industry;
-    memo.sources = memo.sources.filter((source) => source.kind !== "industry");
+    const cited = new Set(memo.insights.flatMap((insight) => insight.evidenceIds));
+    memo.sources = memo.sources.filter((source) => source.kind !== "industry" || cited.has(source.id));
     memo.sources.push({
       id: industry.sourceId,
       title: `${industry.reportTitle} (IBISWorld ${reportCode})`,

@@ -8,7 +8,8 @@
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "check:pilots": "tsx scripts/check-pilots.ts"
+    "check:pilots": "tsx scripts/check-pilots.ts",
+    "check:pilots:fixed": "tsx scripts/check-pilots.ts --fixed"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.3",

@@ -8,7 +8,7 @@ const InsightSchema = z.object({
     kind: z.enum(["performance", "credit", "growth", "risk", "context"]),
     text: z.string(),
     evidenceIds: z.array(z.string()),
-  })).min(3).max(5),
+  })).max(5),
 });
 
 function sourceIdsFor(metric: Metric, factSource: Map<string, string>): string[] {
@@ -19,40 +19,35 @@ export function fallbackInsights(
   metrics: Metric[], sources: Source[], annual: TrendPoint[], factSource: Map<string, string>,
 ): Insight[] {
   const byId = new Map(metrics.map((metric) => [metric.id, metric]));
-  const growth = byId.get("revenue-growth")!;
-  const leverage = byId.get("leverage")!;
-  const cash = byId.get("cash")!;
+  const growth = byId.get("revenue-growth");
+  const leverage = byId.get("leverage");
+  const cash = byId.get("cash");
   const latest = annual.at(-1);
-  const firstFiling = sources.find((source) => source.kind === "filing")?.id;
-  const evidence = (metric: Metric) => sourceIdsFor(metric, factSource).length
-    ? sourceIdsFor(metric, factSource) : firstFiling ? [firstFiling] : [];
-  const insights: Insight[] = [
-    {
+  const insights: Insight[] = [];
+  const growthEvidence = growth ? sourceIdsFor(growth, factSource) : [];
+  if (growth?.value != null && growthEvidence.length) insights.push({
       id: crypto.randomUUID(), kind: "performance",
-      text: growth.value === null
-        ? "Annual revenue growth could not be verified from standardized filings. Review the underlying filing before drawing a trend conclusion."
-        : `Revenue ${growth.value >= 0 ? "increased" : "decreased"} ${Math.abs(growth.value).toFixed(1)}% in ${latest?.period}. The cause still needs source-backed research.`,
-      evidenceIds: evidence(growth), reviewed: false,
-    },
-    {
+      text: `Revenue ${growth.value >= 0 ? "increased" : "decreased"} ${Math.abs(growth.value).toFixed(1)}% in ${latest?.period ?? growth.period}. The cause still needs source-backed research.`,
+      evidenceIds: growthEvidence, reviewed: false,
+    });
+  const leverageEvidence = leverage ? sourceIdsFor(leverage, factSource) : [];
+  if (leverage?.value != null && leverageEvidence.length) insights.push({
       id: crypto.randomUUID(), kind: "credit",
-      text: leverage.value === null
-        ? "Gross leverage is unavailable from aligned debt and EBITDA inputs; no debt-capacity conclusion is made."
-        : `Estimated gross leverage is ${leverage.value.toFixed(2)}×. This is not a covenant-defined ratio and requires analyst review.`,
-      evidenceIds: evidence(leverage), reviewed: false,
-    },
-    {
+      text: `${leverage.label} is ${leverage.value.toFixed(2)}×, based on ${leverage.formula.toLowerCase()}. This is a screening ratio, not a covenant measure.`,
+      evidenceIds: leverageEvidence, reviewed: false,
+    });
+  const cashEvidence = cash ? sourceIdsFor(cash, factSource) : [];
+  if (cash?.value != null && cashEvidence.length) insights.push({
       id: crypto.randomUUID(), kind: "risk",
-      text: cash.value === null
-        ? "Cash and equivalents could not be mapped from standardized facts; liquidity requires filing review."
-        : `Cash and equivalents were $${(cash.value / 1e9).toFixed(1)}B at ${cash.period}. Available credit facilities and restrictions are not captured here.`,
-      evidenceIds: evidence(cash), reviewed: false,
-    },
-  ];
-  const publicContext = sources.find((source) => source.access === "public" && source.note);
-  if (publicContext) insights.push({
-    id: crypto.randomUUID(), kind: "context", text: publicContext.note!, evidenceIds: [publicContext.id], reviewed: false,
-  });
+      text: `Cash and equivalents were $${(cash.value / 1e9).toFixed(1)}B at ${cash.period}. Available credit facilities and restrictions require separate review.`,
+      evidenceIds: cashEvidence, reviewed: false,
+    });
+  for (const source of sources.filter((item) => item.access === "public" && item.note && item.publishedAt).slice(0, 2)) {
+    insights.push({
+      id: crypto.randomUUID(), kind: "context", text: `${source.note!.trim()} (${source.publishedAt})`,
+      evidenceIds: [source.id], reviewed: false,
+    });
+  }
   return insights;
 }
 
@@ -92,6 +87,7 @@ export async function generateInsights(
       id: crypto.randomUUID(), kind: item.kind, text: item.text.trim(),
       evidenceIds: [...new Set(item.evidenceIds)].filter((id) => allowedIds.has(id)), reviewed: false,
     }));
+    if (!insights.length && fallback.length) throw new Error("AI returned no cited insights for available evidence.");
     if (insights.some((item) => !item.text || !item.evidenceIds.length)) {
       throw new Error("At least one insight lacked traceable public evidence.");
     }

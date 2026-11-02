@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./dossier.css";
 
 export const metadata: Metadata = {
   title: "Fieldnote | Credit research",
