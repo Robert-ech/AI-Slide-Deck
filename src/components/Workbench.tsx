@@ -14,6 +14,7 @@ export default function Workbench() {
   const [selectedTicker, setSelectedTicker] = useState<string | null>("WMT");
   const [companyName, setCompanyName] = useState("Walmart");
   const [suggestions, setSuggestions] = useState<{ ticker: string; name: string }[]>([]);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const [sources, setSources] = useState<PublicSourceInput[]>([]);
   const [news, setNews] = useState<NewsCandidate[]>([]);
   const [memo, setMemo] = useState<Memo | null>(null);
@@ -31,13 +32,24 @@ export default function Workbench() {
   }, []);
   useEffect(() => { void refreshSaved(); }, [refreshSaved]);
   useEffect(() => {
-    if (ticker.trim().length < 1) { setSuggestions([]); return; }
+    if (ticker.trim().length < 1) { setSuggestions([]); setActiveSuggestion(-1); return; }
+    let cancelled = false;
     const timer = setTimeout(async () => {
       const response = await fetch(`/api/companies?q=${encodeURIComponent(ticker)}`);
-      if (response.ok) setSuggestions((await response.json()).companies);
+      if (response.ok) {
+        const result = await response.json();
+        if (cancelled) return;
+        setSuggestions(result.companies);
+        setActiveSuggestion(-1);
+      }
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [ticker]);
+
+  function selectCompany(company: { ticker: string; name: string }) {
+    setTicker(company.ticker); setSelectedTicker(company.ticker); setCompanyName(company.name);
+    setSuggestions([]); setActiveSuggestion(-1);
+  }
 
   async function generate() {
     const resolvedTicker = selectedTicker ?? (/^[A-Za-z.-]{1,8}$/.test(ticker.trim()) ? ticker.trim().toUpperCase() : null);
@@ -45,6 +57,10 @@ export default function Workbench() {
     setError(null); setNotice(null); setBusy("Building memo");
     try {
       const usableSources = sources.filter((source) => source.title || source.url || source.note);
+      if (usableSources.length > 8) throw new Error("Use no more than eight public sources in one memo.");
+      if (usableSources.some((source) => !source.title.trim() || !source.url.trim() || !source.note.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(source.publishedAt ?? ""))) {
+        throw new Error("Each public source needs a title, URL, publication date, and verified evidence note.");
+      }
       const response = await fetch("/api/memos", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ticker: resolvedTicker, publicSources: usableSources }),
@@ -125,6 +141,23 @@ export default function Workbench() {
     finally { setBusy(null); }
   }
 
+  async function reviewSource(sourceId: string, reviewed: boolean) {
+    if (!memo) return;
+    setBusy("Saving source review"); setError(null);
+    try {
+      const response = await fetch(`/api/memos/${memo.id}`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceReviews: [{ id: sourceId, reviewed }] }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Source review could not be saved.");
+      setMemo(result.memo);
+      setNotice(reviewed ? "Source marked reviewed. Confirm its cited claims before reviewing the memo." : "Source returned to pending review.");
+      await refreshSaved();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Source review could not be saved."); }
+    finally { setBusy(null); }
+  }
+
   async function addIndustry() {
     if (!memo) return;
     setBusy("Loading industry context"); setError(null);
@@ -169,6 +202,10 @@ export default function Workbench() {
     setSources((current) => current.map((source, itemIndex) => itemIndex === index ? { ...source, [field]: value } : source));
   }
   function sourceLabel(source: Source): string { return `${source.title}${source.publishedAt ? ` · ${source.publishedAt}` : ""}`; }
+  const reviewReady = memo?.insights.every((insight) => insight.reviewed && insight.evidenceIds.length > 0 && insight.evidenceIds.every((id) => {
+    const source = memo.sources.find((item) => item.id === id);
+    return Boolean(source && (source.kind === "filing" && source.provenance !== "analyst-supplied" || source.reviewed === true));
+  })) ?? false;
 
   return <div className="app-shell">
     <aside className="sidebar">
@@ -178,8 +215,13 @@ export default function Workbench() {
       <div className="side-intro"><h2>Understand the company,<br /><em>then the numbers.</em></h2><p>A source-backed first pass for public-company credit research. The two-page format is under review.</p></div>
 
       <div className="side-block"><div className="side-block-heading"><span>01</span><h3>Choose a company</h3></div>
-        <label htmlFor="ticker">COMPANY NAME OR TICKER</label><div className="ticker-box"><input id="ticker" value={ticker} onChange={(event) => { setTicker(event.target.value); setSelectedTicker(null); }} placeholder="WMT or Walmart" maxLength={60} autoComplete="off" /><span>↗</span></div>
-        {suggestions.length > 0 && <div className="suggestions">{suggestions.slice(0, 5).map((company) => <button key={company.ticker} onClick={() => { setTicker(company.ticker); setSelectedTicker(company.ticker); setCompanyName(company.name); setSuggestions([]); }}><b>{company.ticker}</b><span>{company.name}</span></button>)}</div>}
+        <label htmlFor="ticker">COMPANY NAME OR TICKER</label><div className="ticker-box"><input id="ticker" role="combobox" aria-autocomplete="list" aria-expanded={suggestions.length > 0} aria-controls="company-suggestions" aria-activedescendant={activeSuggestion >= 0 ? `company-option-${suggestions[activeSuggestion]?.ticker}` : undefined} value={ticker} onChange={(event) => { setTicker(event.target.value); setSelectedTicker(null); }} onKeyDown={(event) => {
+          if (event.key === "ArrowDown" && suggestions.length) { event.preventDefault(); setActiveSuggestion((current) => (current + 1) % Math.min(5, suggestions.length)); }
+          if (event.key === "ArrowUp" && suggestions.length) { event.preventDefault(); setActiveSuggestion((current) => (current <= 0 ? Math.min(5, suggestions.length) : current) - 1); }
+          if (event.key === "Enter" && suggestions.length) { event.preventDefault(); selectCompany(suggestions[activeSuggestion >= 0 ? activeSuggestion : 0]); }
+          if (event.key === "Escape") { setSuggestions([]); setActiveSuggestion(-1); }
+        }} placeholder="WMT or Walmart" maxLength={60} autoComplete="off" /><span aria-hidden="true">↗</span></div>
+        {suggestions.length > 0 && <div className="suggestions" id="company-suggestions" role="listbox" aria-label="Company search results">{suggestions.slice(0, 5).map((company, index) => <button id={`company-option-${company.ticker}`} role="option" aria-selected={index === activeSuggestion} key={company.ticker} onClick={() => selectCompany(company)}><b>{company.ticker}</b><span>{company.name}</span></button>)}</div>}
         <div className="pilot-picks"><span>PILOT COMPANIES</span><button onClick={() => { setTicker("WMT"); setSelectedTicker("WMT"); setCompanyName("Walmart"); }}>WMT</button><button onClick={() => { setTicker("MSFT"); setSelectedTicker("MSFT"); setCompanyName("Microsoft"); }}>MSFT</button></div>
         <div className="pilot-preview"><button onClick={() => openPilot("WMT")}>Preview Walmart memo ↗</button><button onClick={() => openPilot("MSFT")}>Preview Microsoft memo ↗</button></div>
       </div>
@@ -192,9 +234,10 @@ export default function Workbench() {
         {news.length > 0 && <div className="news-candidates"><span className="tiny-label">RECENT CANDIDATES</span>{news.slice(0, 6).map((candidate) => <button key={candidate.url} onClick={() => { setSources((current) => [...current, { title: candidate.title, url: candidate.url, publishedAt: candidate.publishedAt, note: "", kind: "public-news" }]); setNews([]); }}><b>{candidate.title}</b><small>{candidate.domain} · Add source + note</small></button>)}</div>}
         {sources.map((source, index) => <div className="source-editor" key={index}>
           <div className="source-editor-title"><span>SOURCE {index + 1}</span><button onClick={() => setSources((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label="Remove source">×</button></div>
-          <input placeholder="Article title" value={source.title} onChange={(event) => updateSource(index, "title", event.target.value)} />
-          <input placeholder="https://…" value={source.url} onChange={(event) => updateSource(index, "url", event.target.value)} />
-          <textarea placeholder="Verified fact or event from this source" value={source.note} onChange={(event) => updateSource(index, "note", event.target.value)} rows={3} />
+          <label htmlFor={`source-title-${index}`}>TITLE</label><input id={`source-title-${index}`} placeholder="Article or release title" value={source.title} onChange={(event) => updateSource(index, "title", event.target.value)} />
+          <label htmlFor={`source-url-${index}`}>PUBLIC URL</label><input id={`source-url-${index}`} type="url" placeholder="https://…" value={source.url} onChange={(event) => updateSource(index, "url", event.target.value)} />
+          <label htmlFor={`source-date-${index}`}>PUBLICATION DATE · REQUIRED</label><input id={`source-date-${index}`} type="date" max={new Date().toISOString().slice(0, 10)} required value={source.publishedAt ?? ""} onChange={(event) => updateSource(index, "publishedAt", event.target.value)} />
+          <label htmlFor={`source-note-${index}`}>VERIFIED EVIDENCE NOTE</label><textarea id={`source-note-${index}`} placeholder="Fact or event checked against this source" value={source.note} onChange={(event) => updateSource(index, "note", event.target.value)} rows={3} />
         </div>)}
         <button className="text-button" onClick={() => setSources((current) => [...current, blankSource()])}>+ Add source manually</button>
       </div>
@@ -210,9 +253,10 @@ export default function Workbench() {
       <div className="workspace-grid"><div className="memo-column">
         <div className="canvas-toolbar"><div><span className="eyebrow">THE DELIVERABLE / DESIGN PREVIEW</span><h2>Two-page memo</h2></div><span className="canvas-stage">01 FINANCIALS &nbsp; / &nbsp; 02 CONTEXT</span></div>
         {memo ? <><MemoView memo={memo} />{memo.warnings.length > 0 && <div className="warning-panel"><b>Data and review notes</b>{memo.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}</> : <div className="empty-memo"><div className="empty-sheet"><div className="empty-topline" /><div className="empty-title">The best memo begins<br /><em>with the right question.</em></div><div className="empty-divider" /><div className="empty-grid"><span /><span /><span /><span /></div><p>Preview Walmart or Microsoft to review the two-page design, or generate a source-backed draft using available SEC data.</p></div><span className="empty-caption">TWO-PAGE FORMAT READY FOR REVIEW · NEW DATA SECTIONS SHOW N/A</span></div>}
-        {memo && !memo.id.startsWith("pilot-") && <div className="review-panel"><div className="review-heading"><div><span className="eyebrow">ANALYST CONTROL</span><h2>Review the narrative</h2></div><span className={`review-badge ${memo.reviewStatus}`}>{memo.reviewStatus}</span></div><p>Check each claim against its cited source. Editing a line returns the memo to draft status.</p>
+        {memo && !memo.id.startsWith("pilot-") && <div className="review-panel"><div className="review-heading"><div><span className="eyebrow">ANALYST CONTROL</span><h2>Review the narrative</h2></div><span className={`review-badge ${memo.reviewStatus}`}>{memo.reviewStatus}</span></div><p>Open each cited source, verify its publication date and evidence note, then check every narrative claim. Editing a line returns the memo to draft status.</p>
+          {memo.sources.some((source) => source.provenance === "analyst-supplied" && source.kind !== "filing") && <div className="source-review-list"><span className="eyebrow">SOURCE REVIEW</span>{memo.sources.filter((source) => source.provenance === "analyst-supplied" && source.kind !== "filing").map((source) => <div className="source-review-row" key={source.id}><label><input type="checkbox" checked={source.reviewed === true} disabled={Boolean(busy)} onChange={(event) => void reviewSource(source.id, event.target.checked)} /><span>{source.reviewed ? "Reviewed" : "Review pending"}</span></label><div><a href={source.url} target="_blank" rel="noreferrer">{source.title} ↗</a><small>{source.publishedAt ?? "Date N/A"} · {source.access}</small></div></div>)}</div>}
           {memo.insights.map((insight, index) => <div className="review-row" key={insight.id}><div className="review-row-header"><span>0{index + 1} / {insight.kind.toUpperCase()}</span><label><input type="checkbox" checked={insight.reviewed} onChange={(event) => setMemo((current) => current ? { ...current, insights: current.insights.map((item) => item.id === insight.id ? { ...item, reviewed: event.target.checked } : item), reviewStatus: "draft" } : null)} /> Verified</label></div><textarea value={insight.text} onChange={(event) => setMemo((current) => current ? { ...current, insights: current.insights.map((item) => item.id === insight.id ? { ...item, text: event.target.value, reviewed: false } : item), reviewStatus: "draft" } : null)} rows={3} /><small>Evidence: {insight.evidenceIds.map((id) => memo.sources.find((source) => source.id === id)?.title ?? id).join(" · ") || "Source review needed"}</small></div>)}
-          <div className="review-actions"><button className="outline-button" onClick={() => saveInsights(memo.insights)} disabled={Boolean(busy)}>Save draft</button><button className="solid-button" onClick={() => saveInsights(memo.insights, "reviewed")} disabled={Boolean(busy) || memo.insights.some((insight) => !insight.reviewed)}>Mark reviewed</button></div>
+          <div className="review-actions"><button className="outline-button" onClick={() => saveInsights(memo.insights)} disabled={Boolean(busy)}>Save draft</button><button className="solid-button" onClick={() => saveInsights(memo.insights, "reviewed")} disabled={Boolean(busy) || !reviewReady}>Mark reviewed</button></div>{!reviewReady && <p className="review-help">Review every insight and its cited public source before marking the memo reviewed.</p>}
         </div>}
       </div>
 
