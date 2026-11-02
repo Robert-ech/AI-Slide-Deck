@@ -155,3 +155,71 @@ test("gross margin is unavailable when cost does not share the sales period or f
   result = buildFinancials(cik, facts, submissions);
   assert.equal(result.metrics.find((item) => item.id === "gross-margin")?.value, null);
 });
+
+test("verified filing-reported EBITDA takes precedence over the standardized estimate", () => {
+  const { facts, submissions } = fixture();
+  facts.facts.testco = {
+    EBITDA: { label: "EBITDA", units: { USD: [
+      row("2024-01-01", "2024-12-31", 38, "10-K", "FY"),
+      row("2025-01-01", "2025-12-31", 45, "10-K", "FY"),
+    ] } },
+  };
+  const result = buildFinancials(cik, facts, submissions);
+  const ebitda = result.metrics.find((item) => item.id === "ebitda")!;
+  assert.equal(ebitda.value, 45);
+  assert.equal(ebitda.status, "reported");
+  assert.equal(ebitda.label, "Reported EBITDA");
+  assert.equal(result.annualTrends.at(-1)?.ebitda, 45);
+  assert.ok(Math.abs((result.metrics.find((item) => item.id === "leverage")?.value ?? 0) - 20 / 45) < 1e-9);
+  assert.equal(result.facts.find((fact) => fact.id === ebitda.inputFactIds[0])?.concept, "testco:EBITDA");
+});
+
+test("adjusted EBITDA labels do not supersede the filing-based estimate", () => {
+  const { facts, submissions } = fixture();
+  facts.facts.testco = {
+    EBITDA: { label: "Adjusted EBITDA", units: { USD: [row("2025-01-01", "2025-12-31", 60, "10-K", "FY")] } },
+  };
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.value, 36);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.status, "estimated");
+});
+
+test("conflicting issuer EBITDA facts do not silently choose a reported value", () => {
+  const { facts, submissions } = fixture();
+  facts.facts.issuerOne = { EBITDA: { label: "EBITDA", units: { USD: [row("2025-01-01", "2025-12-31", 45, "10-K", "FY")] } } };
+  facts.facts.issuerTwo = { EBITDA: { label: "EBITDA", units: { USD: [row("2025-01-01", "2025-12-31", 50, "10-K", "FY")] } } };
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.value, 36);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.status, "estimated");
+});
+
+test("working-capital days use two FY balances and the compatible revenue/cost basis", () => {
+  const { facts, submissions } = fixture();
+  const gaap = facts.facts["us-gaap"];
+  gaap.CostOfRevenue = { label: "Cost of revenue", units: { USD: [row("2025-01-01", "2025-12-31", 40, "10-K", "FY")] } };
+  gaap.InventoryNet = { label: "Inventory", units: { USD: [
+    row(undefined, "2024-12-31", 16, "10-K", "FY"),
+    row(undefined, "2025-12-31", 20, "10-K", "FY"),
+  ] } };
+  gaap.AccountsReceivableNetCurrent = { label: "Net receivables", units: { USD: [
+    row(undefined, "2024-12-31", 24, "10-K", "FY"),
+    row(undefined, "2025-12-31", 30, "10-K", "FY"),
+  ] } };
+  const result = buildFinancials(cik, facts, submissions);
+  const inventory = result.metrics.find((item) => item.id === "inventory-days")!;
+  const receivables = result.metrics.find((item) => item.id === "receivables-days")!;
+  assert.ok(Math.abs((inventory.value ?? 0) - 18 / 40 * 365) < 1e-9);
+  assert.ok(Math.abs((receivables.value ?? 0) - 27 / 120 * 365) < 1e-9);
+  assert.equal(inventory.inputFactIds.length, 3);
+  assert.equal(receivables.inputFactIds.length, 3);
+});
+
+test("working-capital metrics stay unavailable without two comparable FY balances", () => {
+  const { facts, submissions } = fixture();
+  const result = buildFinancials(cik, facts, submissions);
+  for (const id of ["inventory-days", "receivables-days"]) {
+    const metric = result.metrics.find((item) => item.id === id)!;
+    assert.equal(metric.value, null);
+    assert.match(metric.unavailableReason ?? "", /two comparable FY/);
+  }
+});
