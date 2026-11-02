@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getMemo, saveMemo } from "@/lib/db";
 import { reviewProblem } from "@/lib/review";
+import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,8 @@ export async function GET(_request: NextRequest, context: { params: Promise<{ id
 }
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const blocked = guardLocalMutation(request, "json");
+  if (blocked) return blocked;
   try {
     const { id } = await context.params;
     const memo = getMemo(id);

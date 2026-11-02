@@ -6,6 +6,7 @@ import { generateInsights } from "@/lib/insights";
 import { normalizePublicSources } from "@/lib/research";
 import { getSecBundle } from "@/lib/sec";
 import type { Memo } from "@/lib/types";
+import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
 
@@ -26,6 +27,8 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const blocked = guardLocalMutation(request, "json");
+  if (blocked) return blocked;
   try {
     const input = RequestSchema.parse(await request.json());
     const bundle = await getSecBundle(input.ticker);

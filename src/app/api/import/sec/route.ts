@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CompanyFacts, Submissions } from "@/lib/sec";
+import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
 
 const CIKS: Record<string, number> = { WMT: 104169, MSFT: 789019 };
 
 export async function POST(request: NextRequest) {
+  const blocked = guardLocalMutation(request, "multipart");
+  if (blocked) return blocked;
   try {
     const form = await request.formData();
     const ticker = String(form.get("ticker") ?? "").toUpperCase();

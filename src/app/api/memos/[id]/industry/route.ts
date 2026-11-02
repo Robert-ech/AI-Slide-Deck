@@ -2,10 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getMemo, saveMemo } from "@/lib/db";
 import { getIndustryContext } from "@/lib/ibisworld";
+import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
 
 export async function POST(request: NextRequest, context: { params: Promise<{ id: string }> }) {
+  const blocked = guardLocalMutation(request, "json");
+  if (blocked) return blocked;
   try {
     const { id } = await context.params;
     const memo = getMemo(id);
