@@ -16,7 +16,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     const { reportCode } = z.object({ reportCode: z.string().min(2).max(24) }).parse(await request.json());
     const industry = await getIndustryContext(reportCode);
     memo.industry = industry;
-    memo.sources = memo.sources.filter((source) => source.kind !== "industry");
+    const cited = new Set(memo.insights.flatMap((insight) => insight.evidenceIds));
+    memo.sources = memo.sources.filter((source) => source.kind !== "industry" || cited.has(source.id));
     memo.sources.push({
       id: industry.sourceId,
       title: `${industry.reportTitle} (IBISWorld ${reportCode})`,
