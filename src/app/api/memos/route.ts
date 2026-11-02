@@ -12,7 +12,7 @@ export const runtime = "nodejs";
 const SourceInput = z.object({
   title: z.string().min(1).max(160),
   url: z.url(),
-  publishedAt: z.string().optional(),
+  publishedAt: z.iso.date(),
   note: z.string().min(1).max(800),
   kind: z.enum(["public-news", "company-release"]),
 });
