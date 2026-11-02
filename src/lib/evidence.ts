@@ -14,7 +14,7 @@ export function isValidEvidenceUrl(value: string): boolean {
   }
 }
 
-const sourceInput = z.object({
+export const sourceInputSchema = z.object({
   title: z.string().trim().min(3).max(180),
   url: z.string().trim().max(2048).refine(isValidEvidenceUrl, "Source must be a public HTTPS URL."),
   access: z.enum(["public", "licensed"]),
@@ -24,7 +24,7 @@ const sourceInput = z.object({
 
 const sourceReference = z.object({
   sourceId: z.string().trim().min(1).max(120).optional(),
-  source: sourceInput.optional(),
+  source: sourceInputSchema.optional(),
 }).refine((value) => Boolean(value.sourceId) !== Boolean(value.source), "Provide exactly one sourceId or source.");
 
 const bucketInput = z.object({
@@ -84,7 +84,7 @@ export const ratingInputSchema = z.object({
   source: sourceReference.shape.source,
 }).strict().refine((value) => Boolean(value.sourceId) !== Boolean(value.source), "Provide exactly one sourceId or source.");
 
-type SourceInput = z.infer<typeof sourceInput>;
+type SourceInput = z.infer<typeof sourceInputSchema>;
 
 export function assertCompanyIdentity(memo: Memo, ticker: string): void {
   if (memo.company.ticker.trim().toUpperCase() !== ticker.trim().toUpperCase()) {

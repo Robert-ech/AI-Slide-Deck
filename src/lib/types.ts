@@ -30,7 +30,7 @@ export type Metric = {
   label: string;
   period: string;
   value: number | null;
-  unit: "USD" | "percent" | "multiple";
+  unit: "USD" | "percent" | "multiple" | "days";
   formula: string;
   inputFactIds: string[];
   status: "reported" | "calculated" | "estimated" | "unavailable";
