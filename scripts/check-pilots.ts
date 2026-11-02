@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { getSecBundle } from "../src/lib/sec";
 import { buildFinancials } from "../src/lib/financials";
+import { pilotMemo } from "../src/lib/pilots";
 
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
@@ -11,11 +12,14 @@ const benchmarks: Record<string, Record<string, number>> = {
     "gross-margin": (225465 / 331839) * 100, cash: 20935e6, debt: 40294e6 },
 };
 const grossMarginBases: Record<string, number> = { WMT: 706413e6, MSFT: 331839e6 };
+const maturityTotals: Record<string, number> = { WMT: 38166, MSFT: 46136 };
 
 async function main() {
-  for (const ticker of ["WMT", "MSFT"]) {
-    const bundle = await getSecBundle(ticker);
-    const result = buildFinancials(bundle.company.cik, bundle.facts, bundle.submissions);
+  const fixed = process.argv.includes("--fixed");
+  for (const ticker of ["WMT", "MSFT"] as const) {
+    const bundle = fixed ? null : await getSecBundle(ticker);
+    const memo = fixed ? pilotMemo(ticker) : null;
+    const result = memo ?? buildFinancials(bundle!.company.cik, bundle!.facts, bundle!.submissions);
     const mismatches: string[] = [];
     const factsById = new Map(result.facts.map((fact) => [fact.id, fact]));
     const sourceIds = new Set(result.sources.map((source) => source.id));
@@ -38,9 +42,21 @@ async function main() {
         if (!fact || !sourceIds.has(fact.sourceId)) mismatches.push(`${metric.id}: unresolved fact/source ${id}`);
       }
     }
+    if (fixed) {
+      const maturityTotal = memo!.debtMaturities?.buckets.reduce((sum, bucket) =>
+        sum + (bucket.senior ?? 0) + (bucket.junior ?? 0) + (bucket.unclassified ?? 0), 0);
+      if (maturityTotal !== maturityTotals[ticker]) mismatches.push(`maturities: expected ${maturityTotals[ticker]}, got ${maturityTotal ?? "N/A"}`);
+      if (memo!.googleTrends || memo!.creditRatings) mismatches.push("Unsourced Trends or rating appeared in the fixed preview");
+      for (const insight of memo!.insights) {
+        if (!insight.evidenceIds.length || insight.evidenceIds.some((id) => !sourceIds.has(id))) {
+          mismatches.push(`${insight.id}: unresolved narrative citation`);
+        }
+      }
+    }
     console.log(JSON.stringify({
+      mode: fixed ? "fixed-filing-preview" : "live-sec-calculation",
       ticker,
-      company: bundle.company.name,
+      company: fixed ? memo!.company.name : bundle!.company.name,
       period: result.periodLabel,
       metrics: result.metrics.map(({ id, value, period, status, unavailableReason }) => ({ id, value, period, status, unavailableReason })),
       benchmark: mismatches.length ? { status: "mismatch", mismatches } : { status: "match" },
