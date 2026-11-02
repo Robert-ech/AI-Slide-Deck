@@ -139,6 +139,32 @@ export default function Workbench() {
     finally { setBusy(null); }
   }
 
+  async function printMemo() {
+    const pages = Array.from(document.querySelectorAll<HTMLElement>("#print-memo .dossier-page"));
+    if (pages.length !== 2) {
+      setError("The memo preview must contain exactly two pages before printing.");
+      return;
+    }
+    await document.fonts.ready;
+    const measure = document.createElement("div");
+    measure.className = "dossier-print-measure";
+    measure.setAttribute("aria-hidden", "true");
+    pages.forEach((page) => measure.appendChild(page.cloneNode(true)));
+    document.body.appendChild(measure);
+    const overflowing = Array.from(measure.querySelectorAll<HTMLElement>(".dossier-page")).some((page) => {
+      const footer = page.querySelector<HTMLElement>(".dossier-foot");
+      return page.scrollHeight > page.clientHeight + 2 ||
+        (footer !== null && footer.getBoundingClientRect().bottom > page.getBoundingClientRect().bottom - 4);
+    });
+    measure.remove();
+    if (overflowing) {
+      setError("This draft exceeds two letter pages. Shorten the narrative or source register, save the draft, then try printing again.");
+      return;
+    }
+    setError(null);
+    window.print();
+  }
+
   function updateSource(index: number, field: keyof PublicSourceInput, value: string) {
     setSources((current) => current.map((source, itemIndex) => itemIndex === index ? { ...source, [field]: value } : source));
   }
@@ -178,7 +204,7 @@ export default function Workbench() {
     </aside>
 
     <main className="main-panel">
-      <header className="topbar"><div><span className="eyebrow">DS3 / CREDIT INTELLIGENCE</span><h1>Research workbench</h1></div><div className="topbar-actions"><span className="topbar-date">PRIVATE PILOT</span>{memo && <button className="outline-button" onClick={() => window.print()}>Print / Save as PDF ↗</button>}</div></header>
+      <header className="topbar"><div><span className="eyebrow">DS3 / CREDIT INTELLIGENCE</span><h1>Research workbench</h1></div><div className="topbar-actions"><span className="topbar-date">PRIVATE PILOT</span>{memo && <button className="outline-button" onClick={() => void printMemo()}>Print / Save as PDF ↗</button>}</div></header>
       {error && <div className="alert error"><b>Action needed</b><span>{error}</span><button onClick={() => setError(null)}>×</button></div>}
       {notice && <div className="alert notice"><span>{notice}</span><button onClick={() => setNotice(null)}>×</button></div>}
       <div className="workspace-grid"><div className="memo-column">
