@@ -264,6 +264,30 @@ export default function Workbench() {
     finally { setBusy(null); }
   }
 
+  async function addPublicIndustry(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!memo) return;
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    setBusy("Adding public industry context"); setError(null);
+    try {
+      const response = await fetch(`/api/memos/${memo.id}/industry/public`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: String(data.get("title") ?? "").trim(), url: String(data.get("url") ?? "").trim(),
+          publishedAt: String(data.get("publishedAt") ?? ""), summary: String(data.get("summary") ?? "").trim(),
+          reviewed: data.has("reviewed"),
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Public industry context could not be added.");
+      setMemo(result.memo); setNotice("Reviewed public industry context added with its source. The memo remains a draft.");
+      form.reset();
+      await refreshSaved();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Public industry context could not be added."); }
+    finally { setBusy(null); }
+  }
+
   async function printMemo() {
     const pages = Array.from(document.querySelectorAll<HTMLElement>("#print-memo .dossier-page"));
     if (pages.length !== 2) {
@@ -363,7 +387,10 @@ export default function Workbench() {
           <details><summary>Credit rating</summary><form onSubmit={(event) => void importRating(event)}><label>Agency<select name="agency" defaultValue="Moody's"><option>Moody&apos;s</option><option>S&amp;P</option><option>Fitch</option><option>Other</option></select></label><label>Grade<input name="rating" required maxLength={16} placeholder="A1" /></label><label>Scope<input name="scope" required minLength={3} maxLength={100} placeholder="Senior unsecured issuer" /></label><label>Rating as of<input name="asOf" type="date" required /></label><EvidenceSourceFields /><label className="evidence-verified"><input name="reviewed" type="checkbox" /> I checked the grade, scope, and date against this source</label><button type="submit" disabled={Boolean(busy)}>Import rating</button></form></details>
           <details><summary>Google Trends export</summary><form onSubmit={(event) => void importTrends(event)}><p>Export one query from Google Trends. Query, geography, and dates must match the CSV.</p><label>CSV file<input name="csv" type="file" accept=".csv,text/csv" required /></label><label>Query<input name="query" required maxLength={100} placeholder="Walmart" /></label><label>Geography<input name="geography" required maxLength={100} placeholder="United States" /></label><label>Period start<input name="periodStart" type="date" required /></label><label>Period end<input name="periodEnd" type="date" required /></label><label>Retrieved on<input name="retrievedAt" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} /></label><EvidenceSourceFields publicOnly /><label className="evidence-verified"><input name="reviewed" type="checkbox" /> I checked the CSV against the stated query and period</label><button type="submit" disabled={Boolean(busy)}>Import Trends CSV</button></form></details>
         </div>}
-        {memo && !memo.id.startsWith("pilot-") && <div className="rail-card industry-card"><span className="eyebrow">LICENSED INDUSTRY CONTEXT</span><h3>IBISWorld</h3><p>Choose a report code from your licensed account. This section remains local and is excluded from AI prompts.</p><div className="industry-form"><input value={reportCode} onChange={(event) => setReportCode(event.target.value)} placeholder="Report code" aria-label="IBISWorld report code" /><button onClick={addIndustry} disabled={Boolean(busy) || !reportCode.trim()}>Load</button></div>{memo.industry && <details className="industry-detail"><summary>Connected: {memo.industry.reportTitle}</summary><p>{memo.industry.summary}</p></details>}</div>}
+        {memo && !memo.id.startsWith("pilot-") && <div className="rail-card industry-card"><span className="eyebrow">INDUSTRY CONTEXT</span><h3>Add a cited view</h3><p>Use a public report with a checked summary, or connect a licensed IBISWorld report. The memo shows a short excerpt; full text stays here.</p>
+          <details className="industry-public"><summary>Add a public source</summary><form onSubmit={(event) => void addPublicIndustry(event)}><label>Report title<input name="title" required minLength={3} maxLength={180} placeholder="Public industry outlook" /></label><label>Public HTTPS URL<input name="url" type="url" required pattern="https://.*" placeholder="https://…" /></label><label>Publication date<input name="publishedAt" type="date" required max={new Date().toISOString().slice(0, 10)} /></label><label>Attributable summary<textarea name="summary" required minLength={40} maxLength={1200} rows={4} placeholder="What does this source say about demand, costs, or industry conditions?" /></label><label className="evidence-verified"><input name="reviewed" type="checkbox" required /> I checked this summary against the linked public source</label><button type="submit" disabled={Boolean(busy)}>Add public context</button></form></details>
+          <details className="industry-public"><summary>Connect IBISWorld with a licensed account</summary><p>Choose a report code from your licensed account. This section stays local and is excluded from AI prompts.</p><div className="industry-form"><input value={reportCode} onChange={(event) => setReportCode(event.target.value)} placeholder="Report code" aria-label="IBISWorld report code" /><button onClick={addIndustry} disabled={Boolean(busy) || !reportCode.trim()}>Load</button></div></details>
+          {memo.industry && <details className="industry-detail"><summary>Connected: {memo.industry.reportTitle}</summary><p>{memo.industry.summary}</p></details>}</div>}
         <div className="rail-card saved-card"><span className="eyebrow">LOCAL ARCHIVE</span><h3>Recent memos</h3>{saved.length ? saved.map((item) => <button key={item.id} onClick={() => openMemo(item.id)}><span><b>{item.company.ticker}</b><small>{new Date(item.generatedAt).toLocaleDateString()}</small></span><span>↗</span></button>) : <p>No memos yet. Generate the first pilot to begin.</p>}</div>
       </aside></div>
     </main>
