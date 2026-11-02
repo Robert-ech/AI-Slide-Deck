@@ -1,90 +1,94 @@
 "use client";
 
-import type { FinancialFact, Memo, Metric, Source, TrendPoint } from "@/lib/types";
-
-export type LayoutStyle = "classic" | "brief" | "ledger";
+import type { FinancialFact, Memo, Metric, Source } from "@/lib/types";
 
 function money(value: number | null): string {
   if (value === null) return "N/A";
-  const abs = Math.abs(value);
-  if (abs >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
-  if (abs >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
+  if (Math.abs(value) >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+  if (Math.abs(value) >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  if (Math.abs(value) >= 1e6) return `$${(value / 1e6).toFixed(1)}M`;
   return `$${value.toLocaleString()}`;
 }
 
-function metricValue(metric: Metric): string {
-  if (metric.value === null) return "N/A";
+function metricValue(metric?: Metric): string {
+  if (!metric || metric.value === null) return "N/A";
   if (metric.unit === "USD") return money(metric.value);
-  if (metric.unit === "percent") return `${metric.value.toFixed(1)}%`;
-  return `${metric.value.toFixed(2)}×`;
+  return metric.unit === "percent" ? `${metric.value.toFixed(1)}%` : `${metric.value.toFixed(2)}×`;
 }
 
-function dateLabel(value: string): string {
-  if (!value) return "Date unavailable";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
-}
-
-function sourceIds(factIds: string[], facts: FinancialFact[]): string[] {
+function factSources(ids: string[], facts: FinancialFact[]): string[] {
   const byId = new Map(facts.map((fact) => [fact.id, fact.sourceId]));
-  return [...new Set(factIds.map((id) => byId.get(id)).filter((id): id is string => Boolean(id)))];
-}
-
-function MetricTable({ metrics, facts, sources }: { metrics: Metric[]; facts: FinancialFact[]; sources: Source[] }) {
-  return <div className="metric-table" role="table" aria-label="Financial and credit metrics">
-    {metrics.map((metric) => <div className="metric-row" role="row" key={metric.id} title={`${metric.formula}${metric.note ? ` — ${metric.note}` : ""}`}>
-      <div role="cell"><span className="metric-name">{metric.label}</span><small>{metric.period}</small></div>
-      <strong role="cell">{metricValue(metric)} {metric.value !== null && <Citation ids={sourceIds(metric.inputFactIds, facts)} sources={sources} />}</strong>
-      <span className={`metric-status ${metric.status}`} role="cell">{metric.status}</span>
-    </div>)}
-  </div>;
-}
-
-function TrendChart({ points, quarterly, facts, sources }: { points: TrendPoint[]; quarterly: TrendPoint[]; facts: FinancialFact[]; sources: Source[] }) {
-  const visible = points.slice(-3);
-  const values = visible.flatMap((point) => [point.revenueYoY, point.ebitdaYoY]).filter((value): value is number => value !== null);
-  const scale = Math.max(10, ...values.map((value) => Math.abs(value)));
-  return <div className="trend-chart" aria-label="Year over year revenue and estimated EBITDA growth chart">
-    <div className="chart-legend"><span><i className="legend-revenue" /> Revenue YoY</span><span><i className="legend-ebitda" /> Est. EBITDA YoY</span></div>
-    {visible.map((point) => <div className="chart-row" key={point.end}>
-      <div className="chart-year">{point.period}</div>
-      <div className="chart-bars">
-        {[{ value: point.revenueYoY, className: "revenue" }, { value: point.ebitdaYoY, className: "ebitda" }].map((item, index) => <div className="bar-track" key={index}>
-          <span className={`bar-fill ${item.className} ${item.value !== null && item.value < 0 ? "negative" : ""}`} style={{ width: item.value === null ? "0%" : `${Math.max(5, Math.abs(item.value) / scale * 74)}%` }} />
-          <span className="bar-value">{item.value === null ? "—" : `${item.value > 0 ? "+" : ""}${item.value.toFixed(1)}%`}</span>
-        </div>)}
-      </div>
-    </div>)}
-    {quarterly.length > 0 && <p className="quarter-callout">Latest quarter · {quarterly.at(-1)?.period.replace("Q ", "ended ")} · revenue {money(quarterly.at(-1)!.revenue)}{quarterly.at(-1)?.revenueYoY !== null ? ` · ${quarterly.at(-1)!.revenueYoY!.toFixed(1)}% YoY` : " · YoY unavailable"} · estimated EBITDA {money(quarterly.at(-1)!.ebitda)}</p>}
-    <p className="chart-footnote">EBITDA is an estimate from operating income plus depreciation and amortization. <Citation ids={sourceIds([...visible.flatMap((point) => [...point.revenueFactIds, ...point.ebitdaFactIds]), ...(quarterly.at(-1)?.revenueFactIds ?? []), ...(quarterly.at(-1)?.ebitdaFactIds ?? [])], facts)} sources={sources} /></p>
-  </div>;
+  return [...new Set(ids.map((id) => byId.get(id)).filter((id): id is string => Boolean(id)))];
 }
 
 function Citation({ ids, sources }: { ids: string[]; sources: Source[] }) {
   const matches = ids.map((id) => sources.find((source) => source.id === id)).filter((source): source is Source => Boolean(source));
-  if (!matches.length) return <span className="citation missing">Source review needed</span>;
-  return <span className="citation">{matches.map((source, index) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id} title={source.title}>[{sources.indexOf(source) + 1}]{index < matches.length - 1 ? " " : ""}</a>)}</span>;
+  if (!matches.length) return <span className="dossier-uncited">Source review needed</span>;
+  return <span className="dossier-citations">{matches.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id} title={source.title}>[{sources.indexOf(source) + 1}]</a>)}</span>;
 }
 
-export default function MemoView({ memo, layout }: { memo: Memo; layout: LayoutStyle }) {
-  const generated = dateLabel(memo.generatedAt);
-  const companyDescription = memo.company.description || "Public company";
-  return <article className={`memo-paper memo-${layout}`} id="print-memo">
-    <header className="memo-header">
-      <div className="memo-overline"><span>COMPANY RESEARCH / CREDIT SNAPSHOT</span><span>{memo.reviewStatus === "reviewed" ? "REVIEWED" : "DRAFT · ANALYST REVIEW REQUIRED"}</span></div>
-      <div className="memo-title-line"><div><h1>{memo.company.name}</h1><p>{memo.company.ticker} <span>•</span> {companyDescription}</p></div><div className="memo-asof"><b>AS OF</b><span>{generated}</span><small>{memo.periodLabel}</small></div></div>
+function PageFrame({ memo, page, title, children }: { memo: Memo; page: 1 | 2; title: string; children: React.ReactNode }) {
+  return <article className="dossier-page" aria-label={`Memo page ${page}: ${title}`}>
+    <header className="dossier-head">
+      <div className="dossier-topline"><span>FIELDNOTE <i /> COMPANY RESEARCH</span><span>DS3 CONSULTING / PRIVATE PILOT</span></div>
+      <div className="dossier-head-main"><div><span className="dossier-kicker">{page === 1 ? "FINANCIAL POSITION" : "BUSINESS PERSPECTIVE"} / 0{page}</span><h2>{title}</h2><p>{memo.company.name} <span>·</span> {memo.company.ticker} <span>·</span> {memo.periodLabel}</p></div><div className="dossier-head-side"><strong>{page}<span>/02</span></strong><small>{memo.reviewStatus === "reviewed" ? "REVIEWED" : "DRAFT · ANALYST REVIEW"}</small></div></div>
     </header>
-
-    <div className="memo-body">
-      <section className="memo-section metrics-section"><div className="section-heading"><span>01</span><h2>Financial profile</h2></div><MetricTable metrics={memo.metrics} facts={memo.facts} sources={memo.sources} /></section>
-      <section className="memo-section chart-section"><div className="section-heading"><span>02</span><h2>Operating momentum</h2></div><TrendChart points={memo.annualTrends} quarterly={memo.quarterlyTrends} facts={memo.facts} sources={memo.sources} /></section>
-      <section className="memo-section insights-section"><div className="section-heading"><span>03</span><h2>Analyst takeaways</h2></div><ol className="insight-list">
-        {memo.insights.map((insight) => <li key={insight.id}><span className="insight-kind">{insight.kind}</span><p>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} /></p></li>)}
-      </ol></section>
-      {memo.industry && <section className="memo-section industry-section"><div className="section-heading"><span>04</span><h2>Industry lens</h2></div><p className="industry-title">{memo.industry.reportTitle} · IBISWorld {memo.industry.reportCode}</p><p className="industry-copy">{memo.industry.summary}</p><small>Licensed material. Local analyst reference only; excluded from AI generation. <Citation ids={[memo.industry.sourceId]} sources={memo.sources} /></small></section>}
-    </div>
-
-    <footer className="memo-footer"><span>Public filings are the source for financial values. Estimated ratios are not covenant calculations.</span><span>FIELDNOTE / {memo.company.ticker}</span></footer>
+    <div className="dossier-page-body">{children}</div>
+    <footer className="dossier-foot"><span>Screening research · verify source material before use</span><span>{memo.company.ticker} / 0{page}</span></footer>
   </article>;
+}
+
+export default function MemoView({ memo }: { memo: Memo }) {
+  const byId = new Map(memo.metrics.map((metric) => [metric.id, metric]));
+  const slots = [
+    { label: "Revenue", metric: byId.get("revenue") },
+    { label: "Gross margin", metric: undefined },
+    { label: "Est. EBITDA", metric: byId.get("ebitda") },
+    { label: "Cash", metric: byId.get("cash") },
+    { label: "Debt", metric: byId.get("debt") },
+    { label: "Gross leverage", metric: byId.get("leverage") },
+  ];
+  const annual = memo.annualTrends.slice(-3);
+  const maxRevenue = Math.max(1, ...annual.map((point) => point.revenue ?? 0));
+  const performance = memo.insights.filter((insight) => ["performance", "growth", "context"].includes(insight.kind));
+  const credit = memo.insights.filter((insight) => ["credit", "risk"].includes(insight.kind));
+  const citedIds = new Set([
+    ...slots.flatMap(({ metric }) => metric ? factSources(metric.inputFactIds, memo.facts) : []),
+    ...factSources(annual.flatMap((point) => point.revenueFactIds), memo.facts),
+    ...memo.insights.flatMap((insight) => insight.evidenceIds),
+  ]);
+  const citedPublicSources = memo.sources.filter((source) => source.access === "public" && citedIds.has(source.id));
+
+  return <div className="dossier-preview" id="print-memo">
+    <div className="dossier-preview-note"><span className="preview-pip" /> Two-page layout preview <span>·</span> Available figures are sourced; unfinished sections show N/A</div>
+    <PageFrame memo={memo} page={1} title="Financial position">
+      <div className="dossier-section-title"><span>01 / KEY MEASURES</span><p>Provisional priority · awaiting Ashley&apos;s ranking</p></div>
+      <div className="dossier-metric-grid">{slots.map(({ label, metric }) => <div className={`dossier-metric ${metric?.value == null ? "is-missing" : ""}`} key={label}>
+        <span>{label}</span><strong>{metricValue(metric)}</strong><small>{metric?.period ?? "Data mapping pending"}</small>
+        {metric?.value != null && <Citation ids={factSources(metric.inputFactIds, memo.facts)} sources={memo.sources} />}
+      </div>)}</div>
+      <div className="dossier-coverage"><div><span>IMPORTANT FOR CREDIT</span><strong>Fixed charge coverage</strong></div><div><b>N/A</b><small>Definition and inputs pending client approval</small></div></div>
+      <div className="dossier-chart-grid">
+        <section className="dossier-panel revenue-panel" aria-label="Annual revenue trend; gross margin unavailable"><div className="dossier-panel-head"><div><span>02 / OPERATING TREND</span><h3>Revenue &amp; gross margin</h3></div><span className="panel-period">ANNUAL</span></div>
+          <div className="dossier-revenue-chart">{annual.length ? annual.map((point) => <div className="dossier-revenue-row" key={point.end}><span>{point.period}</span><div className="dossier-revenue-track"><i style={{ width: `${Math.max(4, (point.revenue ?? 0) / maxRevenue * 100)}%` }} /></div><b>{money(point.revenue)}</b></div>) : <div className="dossier-empty-data">Revenue N/A</div>}</div>
+          <div className="dossier-chart-legend"><span><i className="legend-swatch" /> Reported revenue <Citation ids={factSources(annual.flatMap((point) => point.revenueFactIds), memo.facts)} sources={memo.sources} /></span><span><i className="legend-dash" /> Gross margin N/A</span></div>
+          <p className="dossier-panel-note">Gross margin will appear alongside revenue after filing inputs are validated.</p>
+        </section>
+        <section className="dossier-panel maturity-panel" aria-label="Debt maturity chart design; data unavailable"><div className="dossier-panel-head"><div><span>03 / DEBT PROFILE</span><h3>Debt maturities</h3></div><span className="panel-period">DESIGN PREVIEW</span></div><div className="dossier-maturity-skeleton" aria-hidden="true"><i /><i /><i /><i /><i /></div><div className="dossier-skeleton-labels" aria-hidden="true"><span>Y1</span><span>Y2</span><span>Y3</span><span>Y4</span><span>Y5+</span></div><p className="dossier-panel-note"><b>N/A</b> · Maturity schedule and senior/junior split await filing review. Outlined bars show layout only.</p></section>
+      </div>
+      <section className="dossier-panel trends-panel" aria-label="Google Trends chart design; data unavailable"><div><span>04 / EXTERNAL SIGNAL</span><h3>Google search interest</h3><p>Company-specific Google Trends data has not been added. The future chart will show interest over time with its query, region, period, and source.</p></div><div className="dossier-trends-design"><svg viewBox="0 0 150 42" aria-hidden="true"><path d="M0 41H150M0 20H150M0 1H150" className="trend-grid" /><path d="M1 31 23 29 45 33 66 15 87 22 108 9 129 18 149 7" className="trend-ghost" /></svg><strong>N/A · DESIGN ONLY</strong></div></section>
+      <p className="dossier-method">Estimated EBITDA and leverage are screening measures, not covenant calculations. Missing values are not inferred. Financial figures retain their filing trail.</p>
+    </PageFrame>
+    <PageFrame memo={memo} page={2} title="Business perspective">
+      <div className="dossier-section-title"><span>05 / ANALYST READOUT</span><p>Why the numbers moved · what deserves follow-up</p></div>
+      <div className="dossier-lede"><span>THE QUESTION</span><p>What does the evidence tell us about the company&apos;s financial position and the business behind it?</p></div>
+      <div className="dossier-narrative-grid">
+        <section className="dossier-narrative-section"><span>01</span><h3>Performance &amp; drivers</h3>{performance.length ? performance.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} /></p>) : <p>Source-backed explanation pending analyst research.</p>}</section>
+        <section className="dossier-narrative-section"><span>02</span><h3>Credit view &amp; risks</h3>{credit.length ? credit.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} /></p>) : <p>Source-backed credit observations pending analyst research.</p>}</section>
+      </div>
+      <div className="dossier-followup"><div><span>OPPORTUNITIES / FOLLOW-UP</span><h3>Questions for the next pass</h3></div><p>Review drivers of revenue change, liquidity restrictions, debt maturities, and market demand with the underlying filings and public evidence. No opportunity conclusion has been asserted without a source.</p></div>
+      <section className="dossier-source-section"><div className="dossier-section-title"><span>06 / SOURCE REGISTER</span><p>Numbered references used in this draft</p></div><ol>{citedPublicSources.map((source) => <li key={source.id}><span>[{memo.sources.indexOf(source) + 1}]</span><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><small>{source.publishedAt ?? "Date unavailable"}</small></li>)}</ol></section>
+      {memo.industry && <p className="dossier-industry-note">Licensed industry reference: {memo.industry.reportTitle}. This material remains local and is excluded from AI generation.</p>}
+    </PageFrame>
+  </div>;
 }

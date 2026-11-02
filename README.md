@@ -1,6 +1,6 @@
 # Fieldnote: local credit research memo
 
-A private, single-analyst Next.js workbench for a one-page public-company credit research memo. The working app and SQLite database stay on this computer. The three memo layouts and manually checked Walmart and Microsoft FY2026 previews are ready for Ashley's review.
+A private, single-analyst Next.js workbench for a public-company credit research memo. The working app and SQLite database stay on this computer. A two-page website preview for the manually checked Walmart and Microsoft FY2026 pilots is ready for Ashley's layout review.
 
 ## Start locally
 
@@ -23,7 +23,7 @@ Run `npm run typecheck`, `npm test`, and `npm run build` before sharing code. `n
 5. Draft 3–5 insights from public evidence. With an OpenAI key, this uses the Responses API with `store: false` and a structured output. Without a key, the app creates editable, source-linked local observations. All claims require analyst review.
 6. Optionally add IBISWorld context locally by report code. Its licensed text is excluded from the OpenAI request.
 
-The archive is a local SQLite file at `data/memos.sqlite`. The print control opens a one-page letter-sized layout. A/B/C in the toolbar switch the design.
+The archive is a local SQLite file at `data/memos.sqlite`. The **Print / Save as PDF** control opens the browser print dialog for two letter-sized pages. The six headline measures are provisional. Gross margin, debt maturities, Google Trends, and fixed charge coverage show N/A in the preview because their new data paths or definitions have not been implemented. The outlined debt chart is a layout sample, not company data.
 
 ## Privacy and access
 

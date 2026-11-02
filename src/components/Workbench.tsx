@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import MemoView, { type LayoutStyle } from "./MemoView";
+import MemoView from "./MemoView";
 import type { Insight, Memo, PublicSourceInput, Source } from "@/lib/types";
 
 type Saved = Pick<Memo, "id" | "generatedAt" | "company" | "reviewStatus">;
@@ -11,13 +11,13 @@ const blankSource = (): PublicSourceInput => ({ title: "", url: "", publishedAt:
 
 export default function Workbench() {
   const [ticker, setTicker] = useState("WMT");
+  const [selectedTicker, setSelectedTicker] = useState<string | null>("WMT");
   const [companyName, setCompanyName] = useState("Walmart");
   const [suggestions, setSuggestions] = useState<{ ticker: string; name: string }[]>([]);
   const [sources, setSources] = useState<PublicSourceInput[]>([]);
   const [news, setNews] = useState<NewsCandidate[]>([]);
   const [memo, setMemo] = useState<Memo | null>(null);
   const [saved, setSaved] = useState<Saved[]>([]);
-  const [layout, setLayout] = useState<LayoutStyle>("classic");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -40,12 +40,14 @@ export default function Workbench() {
   }, [ticker]);
 
   async function generate() {
+    const resolvedTicker = selectedTicker ?? (/^[A-Za-z.-]{1,8}$/.test(ticker.trim()) ? ticker.trim().toUpperCase() : null);
+    if (!resolvedTicker) { setError("Select a company from the search results before generating a memo."); return; }
     setError(null); setNotice(null); setBusy("Building memo");
     try {
       const usableSources = sources.filter((source) => source.title || source.url || source.note);
       const response = await fetch("/api/memos", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ticker, publicSources: usableSources }),
+        body: JSON.stringify({ ticker: resolvedTicker, publicSources: usableSources }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Memo generation failed.");
@@ -72,7 +74,7 @@ export default function Workbench() {
       const response = await fetch(`/api/pilots/${pilot}`);
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Could not open pilot.");
-      setMemo(result.memo); setTicker(pilot); setCompanyName(result.memo.company.name);
+      setMemo(result.memo); setTicker(pilot); setSelectedTicker(pilot); setCompanyName(result.memo.company.name);
       setNotice("This is a manually verified FY2026 design reference. Generate a new memo for the latest filings.");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not open pilot."); }
     finally { setBusy(null); }
@@ -83,7 +85,7 @@ export default function Workbench() {
     setBusy("Importing SEC files"); setError(null);
     try {
       const form = new FormData();
-      form.append("ticker", ticker);
+      form.append("ticker", selectedTicker ?? ticker);
       form.append("facts", factsFile);
       form.append("submissions", submissionsFile);
       const response = await fetch("/api/import/sec", { method: "POST", body: form });
@@ -147,16 +149,16 @@ export default function Workbench() {
       <div className="brand"><span className="brand-mark">F<span>·</span></span><div><strong>FIELDNOTE</strong><small>CREDIT RESEARCH STUDIO</small></div></div>
       <div className="sidebar-rule" />
       <div className="sidebar-section-label">WORKSPACE <span>01 / LOCAL</span></div>
-      <div className="side-intro"><h2>Company research,<br /><em>with receipts.</em></h2><p>A private first pass for public-company credit and prospecting research.</p></div>
+      <div className="side-intro"><h2>Understand the company,<br /><em>then the numbers.</em></h2><p>A source-backed first pass for public-company credit research. The two-page format is under review.</p></div>
 
       <div className="side-block"><div className="side-block-heading"><span>01</span><h3>Choose a company</h3></div>
-        <label htmlFor="ticker">PUBLIC TICKER</label><div className="ticker-box"><input id="ticker" value={ticker} onChange={(event) => setTicker(event.target.value.toUpperCase())} placeholder="WMT" maxLength={8} /><span>↗</span></div>
-        {suggestions.length > 0 && <div className="suggestions">{suggestions.slice(0, 5).map((company) => <button key={company.ticker} onClick={() => { setTicker(company.ticker); setCompanyName(company.name); setSuggestions([]); }}><b>{company.ticker}</b><span>{company.name}</span></button>)}</div>}
-        <div className="pilot-picks"><span>PILOT COMPANIES</span><button onClick={() => { setTicker("WMT"); setCompanyName("Walmart"); }}>WMT</button><button onClick={() => { setTicker("MSFT"); setCompanyName("Microsoft"); }}>MSFT</button></div>
+        <label htmlFor="ticker">COMPANY NAME OR TICKER</label><div className="ticker-box"><input id="ticker" value={ticker} onChange={(event) => { setTicker(event.target.value); setSelectedTicker(null); }} placeholder="WMT or Walmart" maxLength={60} autoComplete="off" /><span>↗</span></div>
+        {suggestions.length > 0 && <div className="suggestions">{suggestions.slice(0, 5).map((company) => <button key={company.ticker} onClick={() => { setTicker(company.ticker); setSelectedTicker(company.ticker); setCompanyName(company.name); setSuggestions([]); }}><b>{company.ticker}</b><span>{company.name}</span></button>)}</div>}
+        <div className="pilot-picks"><span>PILOT COMPANIES</span><button onClick={() => { setTicker("WMT"); setSelectedTicker("WMT"); setCompanyName("Walmart"); }}>WMT</button><button onClick={() => { setTicker("MSFT"); setSelectedTicker("MSFT"); setCompanyName("Microsoft"); }}>MSFT</button></div>
         <div className="pilot-preview"><button onClick={() => openPilot("WMT")}>Preview Walmart memo ↗</button><button onClick={() => openPilot("MSFT")}>Preview Microsoft memo ↗</button></div>
       </div>
 
-      <details className="import-box"><summary>SEC access blocked? Import JSON locally</summary><p>Download the official companyfacts and submissions JSON for the selected pilot in your browser, then add both files here. They stay on this computer.</p><div className="import-links"><a href={`https://data.sec.gov/api/xbrl/companyfacts/CIK${ticker === "MSFT" ? "0000789019" : "0000104169"}.json`} target="_blank" rel="noreferrer">Company facts ↗</a><a href={`https://data.sec.gov/submissions/CIK${ticker === "MSFT" ? "0000789019" : "0000104169"}.json`} target="_blank" rel="noreferrer">Submissions ↗</a></div><label>COMPANY FACTS JSON<input type="file" accept=".json,application/json" onChange={(event) => setFactsFile(event.target.files?.[0] ?? null)} /></label><label>SUBMISSIONS JSON<input type="file" accept=".json,application/json" onChange={(event) => setSubmissionsFile(event.target.files?.[0] ?? null)} /></label><button onClick={importSecFiles} disabled={Boolean(busy) || !factsFile || !submissionsFile}>Import for {ticker}</button></details>
+      {(selectedTicker === "WMT" || selectedTicker === "MSFT") && <details className="import-box"><summary>SEC access blocked? Import JSON locally</summary><p>Download the official companyfacts and submissions JSON for the selected pilot in your browser, then add both files here. They stay on this computer.</p><div className="import-links"><a href={`https://data.sec.gov/api/xbrl/companyfacts/CIK${selectedTicker === "MSFT" ? "0000789019" : "0000104169"}.json`} target="_blank" rel="noreferrer">Company facts ↗</a><a href={`https://data.sec.gov/submissions/CIK${selectedTicker === "MSFT" ? "0000789019" : "0000104169"}.json`} target="_blank" rel="noreferrer">Submissions ↗</a></div><label>COMPANY FACTS JSON<input type="file" accept=".json,application/json" onChange={(event) => setFactsFile(event.target.files?.[0] ?? null)} /></label><label>SUBMISSIONS JSON<input type="file" accept=".json,application/json" onChange={(event) => setSubmissionsFile(event.target.files?.[0] ?? null)} /></label><button onClick={importSecFiles} disabled={Boolean(busy) || !factsFile || !submissionsFile}>Import for {selectedTicker}</button></details>}
 
       <div className="side-block"><div className="side-block-heading"><span>02</span><h3>Add public context</h3></div>
         <p className="side-hint">Article titles are candidates. Add a short verified note before using one in commentary.</p>
@@ -171,17 +173,17 @@ export default function Workbench() {
         <button className="text-button" onClick={() => setSources((current) => [...current, blankSource()])}>+ Add source manually</button>
       </div>
 
-      <button className="generate-button" onClick={generate} disabled={Boolean(busy)}><span>{busy ?? "Generate research memo"}</span><span>↗</span></button>
+      <button className="generate-button" onClick={generate} disabled={Boolean(busy)}><span>{busy ?? "Generate draft memo"}</span><span>↗</span></button>
       <div className="sidebar-foot"><span className="local-dot" /> Local workspace <span>·</span> Single analyst</div>
     </aside>
 
     <main className="main-panel">
-      <header className="topbar"><div><span className="eyebrow">DS3 / CREDIT INTELLIGENCE</span><h1>Research workbench</h1></div><div className="topbar-actions"><span className="topbar-date">PRIVATE PILOT</span>{memo && <button className="outline-button" onClick={() => window.print()}>Print memo ↗</button>}</div></header>
+      <header className="topbar"><div><span className="eyebrow">DS3 / CREDIT INTELLIGENCE</span><h1>Research workbench</h1></div><div className="topbar-actions"><span className="topbar-date">PRIVATE PILOT</span>{memo && <button className="outline-button" onClick={() => window.print()}>Print / Save as PDF ↗</button>}</div></header>
       {error && <div className="alert error"><b>Action needed</b><span>{error}</span><button onClick={() => setError(null)}>×</button></div>}
       {notice && <div className="alert notice"><span>{notice}</span><button onClick={() => setNotice(null)}>×</button></div>}
       <div className="workspace-grid"><div className="memo-column">
-        <div className="canvas-toolbar"><div><span className="eyebrow">THE DELIVERABLE</span><h2>One-page memo</h2></div><div className="layout-picker" aria-label="Memo layout options"><span>LAYOUT</span>{(["classic", "brief", "ledger"] as const).map((item, index) => <button key={item} className={layout === item ? "active" : ""} onClick={() => setLayout(item)} title={`${item} layout`}>{String.fromCharCode(65 + index)}</button>)}</div></div>
-        {memo ? <><MemoView memo={memo} layout={layout} />{memo.warnings.length > 0 && <div className="warning-panel"><b>Data and review notes</b>{memo.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}</> : <div className="empty-memo"><div className="empty-sheet"><div className="empty-topline" /><div className="empty-title">The best memo begins<br /><em>with the right question.</em></div><div className="empty-divider" /><div className="empty-grid"><span /><span /><span /><span /></div><p>Choose WMT or MSFT, add any public context, and generate a source-backed first draft.</p></div><span className="empty-caption">A / B / C LAYOUTS READY FOR CLIENT REVIEW</span></div>}
+        <div className="canvas-toolbar"><div><span className="eyebrow">THE DELIVERABLE / DESIGN PREVIEW</span><h2>Two-page memo</h2></div><span className="canvas-stage">01 FINANCIALS &nbsp; / &nbsp; 02 CONTEXT</span></div>
+        {memo ? <><MemoView memo={memo} />{memo.warnings.length > 0 && <div className="warning-panel"><b>Data and review notes</b>{memo.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}</> : <div className="empty-memo"><div className="empty-sheet"><div className="empty-topline" /><div className="empty-title">The best memo begins<br /><em>with the right question.</em></div><div className="empty-divider" /><div className="empty-grid"><span /><span /><span /><span /></div><p>Preview Walmart or Microsoft to review the two-page design, or generate a source-backed draft using available SEC data.</p></div><span className="empty-caption">TWO-PAGE FORMAT READY FOR REVIEW · NEW DATA SECTIONS SHOW N/A</span></div>}
         {memo && !memo.id.startsWith("pilot-") && <div className="review-panel"><div className="review-heading"><div><span className="eyebrow">ANALYST CONTROL</span><h2>Review the narrative</h2></div><span className={`review-badge ${memo.reviewStatus}`}>{memo.reviewStatus}</span></div><p>Check each claim against its cited source. Editing a line returns the memo to draft status.</p>
           {memo.insights.map((insight, index) => <div className="review-row" key={insight.id}><div className="review-row-header"><span>0{index + 1} / {insight.kind.toUpperCase()}</span><label><input type="checkbox" checked={insight.reviewed} onChange={(event) => setMemo((current) => current ? { ...current, insights: current.insights.map((item) => item.id === insight.id ? { ...item, reviewed: event.target.checked } : item), reviewStatus: "draft" } : null)} /> Verified</label></div><textarea value={insight.text} onChange={(event) => setMemo((current) => current ? { ...current, insights: current.insights.map((item) => item.id === insight.id ? { ...item, text: event.target.value, reviewed: false } : item), reviewStatus: "draft" } : null)} rows={3} /><small>Evidence: {insight.evidenceIds.map((id) => memo.sources.find((source) => source.id === id)?.title ?? id).join(" · ") || "Source review needed"}</small></div>)}
           <div className="review-actions"><button className="outline-button" onClick={() => saveInsights(memo.insights)} disabled={Boolean(busy)}>Save draft</button><button className="solid-button" onClick={() => saveInsights(memo.insights, "reviewed")} disabled={Boolean(busy) || memo.insights.some((insight) => !insight.reviewed)}>Mark reviewed</button></div>
