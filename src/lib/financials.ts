@@ -7,6 +7,8 @@ type Series = { start?: string; end: string; value: number; selections: Selected
 const CONCEPTS = {
   // Prefer the reported top line when an issuer separately presents net sales and other income.
   revenue: ["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet"],
+  grossProfit: ["GrossProfit"],
+  costOfRevenue: ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"],
   operatingIncome: ["OperatingIncomeLoss"],
   depreciation: [
     "DepreciationDepletionAndAmortization",
@@ -146,6 +148,10 @@ function pointForPeriod(series: Series[], period: Series): Series | undefined {
   return series.find((point) => point.start === period.start && point.end === period.end);
 }
 
+function sameFiling(a: Series, b: Series): boolean {
+  return a.selections[0].entry.accn === b.selections[0].entry.accn;
+}
+
 function valueYoY(series: Series[], index: number, quarterlyMode: boolean): number | null {
   const current = series[index];
   const previous = quarterlyMode
@@ -173,6 +179,9 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
   const revenueAnnual = annual(facts, revenueConcept);
   const operatingAnnual = annual(facts, operatingConcept);
   const depreciationAnnual = annual(facts, depreciationConcept);
+  const grossProfitAnnual = annual(facts, CONCEPTS.grossProfit[0]);
+  const grossRevenueAnnual = new Map<string, Series[]>(CONCEPTS.revenue.map((concept) => [concept, annual(facts, concept)]));
+  const grossCostAnnual = new Map<string, Series[]>(CONCEPTS.costOfRevenue.map((concept) => [concept, annual(facts, concept)]));
   const revenueQuarterly = quarterly(facts, revenueConcept);
   const operatingQuarterly = quarterly(facts, operatingConcept);
   const depreciationQuarterly = quarterly(facts, depreciationConcept);
@@ -216,10 +225,56 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
     });
   }
 
+  function grossForPeriod(period: Series): { profit: number; base: number; profitSelections: Selected[]; baseSelections: Selected[] } | null {
+    const reported = pointForPeriod(grossProfitAnnual, period);
+    const revenueOrder = (cost: string): readonly string[] => cost === "CostOfRevenue"
+      ? CONCEPTS.revenue
+      : ["RevenueFromContractWithCustomerExcludingAssessedTax", "SalesRevenueNet", "Revenues"];
+
+    for (const costConcept of CONCEPTS.costOfRevenue) {
+      const cost = pointForPeriod(grossCostAnnual.get(costConcept) ?? [], period);
+      if (!cost) continue;
+      for (const revenueConcept of revenueOrder(costConcept)) {
+        const base = pointForPeriod(grossRevenueAnnual.get(revenueConcept) ?? [], period);
+        if (!base || base.value <= 0 || !sameFiling(base, cost)) continue;
+        const derivedProfit = base.value - cost.value;
+        if (derivedProfit < 0) continue;
+        if (reported) {
+          // A directly tagged gross-profit line identifies the compatible sales base.
+          // Reject a seemingly plausible combination when it does not reconcile.
+          if (!sameFiling(reported, base) ||
+            Math.abs(derivedProfit - reported.value) > Math.max(1, base.value * 0.000003)) continue;
+          return { profit: reported.value, base: base.value, profitSelections: reported.selections, baseSelections: base.selections };
+        }
+        return {
+          profit: derivedProfit,
+          base: base.value,
+          profitSelections: [...base.selections, ...cost.selections],
+          baseSelections: base.selections,
+        };
+      }
+    }
+
+    // A reported gross-profit fact can be used alone only if its denominator is unambiguous.
+    if (reported) {
+      const candidates = CONCEPTS.revenue
+        .map((concept) => pointForPeriod(grossRevenueAnnual.get(concept) ?? [], period))
+        .filter((candidate): candidate is Series => Boolean(candidate && candidate.value > 0 && sameFiling(candidate, reported)));
+      if (candidates.length === 1) {
+        return {
+          profit: reported.value, base: candidates[0].value,
+          profitSelections: reported.selections, baseSelections: candidates[0].selections,
+        };
+      }
+    }
+    return null;
+  }
+
   function trend(revenues: Series[], operations: Series[], depreciations: Series[], isQuarterly: boolean): TrendPoint[] {
     return revenues.map((revenue, index) => {
       const operation = pointForPeriod(operations, revenue);
       const depreciation = pointForPeriod(depreciations, revenue);
+      const gross = isQuarterly ? null : grossForPeriod(revenue);
       const ebitda = operation && depreciation ? operation.value + depreciation.value : null;
       const previous = isQuarterly
         ? revenues.find((point) => point.end < revenue.end && point.start && revenue.start &&
@@ -237,6 +292,13 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
         ebitdaYoY: ebitda !== null && previousEbitda ? ((ebitda / previousEbitda) - 1) * 100 : null,
         revenueFactIds: register(revenue.selections),
         ebitdaFactIds: operation && depreciation ? register([...operation.selections, ...depreciation.selections]) : [],
+        ...(isQuarterly ? {} : {
+          grossProfit: gross?.profit ?? null,
+          grossMarginBase: gross?.base ?? null,
+          grossMargin: gross ? (gross.profit / gross.base) * 100 : null,
+          grossProfitFactIds: gross ? register(gross.profitSelections) : [],
+          grossMarginBaseFactIds: gross ? register(gross.baseSelections) : [],
+        }),
       };
     });
   }
@@ -244,6 +306,8 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
   const annualTrends = trend(revenueAnnual, operatingAnnual, depreciationAnnual, false).slice(-3);
   const quarterlyTrends = trend(revenueQuarterly, operatingQuarterly, depreciationQuarterly, true).slice(-8);
   const latestAnnual = annualTrends.at(-1);
+  const latestGrossProfitFact = latestAnnual?.grossProfitFactIds?.length === 1
+    ? factMap.get(latestAnnual.grossProfitFactIds[0]) : undefined;
   const latestCash = cash;
   const latestDebtEnd = currentDebtSeries.map((point) => point.end).filter((end) => noncurrentDebtSeries.some((point) => point.end === end)).sort().at(-1);
   const currentDebt = latestDebtEnd ? pointForEnd(currentDebtSeries, latestDebtEnd) ?? null : null;
@@ -277,6 +341,21 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       value: latestAnnual?.revenueYoY ?? null, unit: "percent", formula: "Current FY revenue / prior FY revenue − 1",
       inputFactIds: annualTrends.slice(-2).flatMap((point) => point.revenueFactIds),
       status: latestAnnual?.revenueYoY != null ? "calculated" : "unavailable",
+    },
+    {
+      id: "gross-profit", label: "Gross profit", period: latestAnnual?.period ?? "Latest FY",
+      value: latestAnnual?.grossProfit ?? null, unit: "USD",
+      formula: latestGrossProfitFact?.concept === "GrossProfit" ? "Reported gross profit" : "Compatible sales base − cost of revenue or sales",
+      inputFactIds: latestAnnual?.grossProfitFactIds ?? [],
+      status: latestAnnual?.grossProfit == null ? "unavailable" : latestGrossProfitFact?.concept === "GrossProfit" ? "reported" : "calculated",
+      note: "Gross margin may use a narrower net-sales base than headline total revenue. See cited source concepts.",
+    },
+    {
+      id: "gross-margin", label: "Gross margin", period: latestAnnual?.period ?? "Latest FY",
+      value: latestAnnual?.grossMargin ?? null, unit: "percent", formula: "Gross profit / compatible sales base",
+      inputFactIds: [...(latestAnnual?.grossProfitFactIds ?? []), ...(latestAnnual?.grossMarginBaseFactIds ?? [])],
+      status: latestAnnual?.grossMargin == null ? "unavailable" : "calculated",
+      note: "The denominator follows the cited sales concept used to calculate or reconcile gross profit.",
     },
     {
       id: "ebitda", label: "Estimated EBITDA", period: latestAnnual?.period ?? "Latest FY", value: latestAnnual?.ebitda ?? null,
@@ -321,6 +400,7 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
   if (!depreciationConcept) warnings.push("Depreciation and amortization could not be mapped to a standard SEC fact; EBITDA is unavailable.");
   if (totalDebt === null) warnings.push("Gross debt is unavailable because same-date current and noncurrent components were not both found.");
   if (!latestAnnual) warnings.push("Annual revenue could not be mapped to a standard SEC fact.");
+  if (latestAnnual && latestAnnual.grossMargin == null) warnings.push("Gross margin is unavailable without a compatible same-period gross profit or sales-and-cost basis.");
   if (!ttmAligned && !annualAligned) warnings.push("Leverage is unavailable because debt and EBITDA periods do not align.");
 
   return {

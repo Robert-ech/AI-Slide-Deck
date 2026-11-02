@@ -5,9 +5,12 @@ import { buildFinancials } from "../src/lib/financials";
 if (existsSync(".env.local")) process.loadEnvFile(".env.local");
 
 const benchmarks: Record<string, Record<string, number>> = {
-  WMT: { revenue: 713163e6, "revenue-growth": (713163 / 680985 - 1) * 100, ebitda: 44028e6, cash: 10727e6, debt: 44762e6, leverage: 44762 / 44028 },
-  MSFT: { revenue: 331839e6, "revenue-growth": (331839 / 281724 - 1) * 100, cash: 20935e6, debt: 40294e6 },
+  WMT: { revenue: 713163e6, "revenue-growth": (713163 / 680985 - 1) * 100, "gross-profit": 171018e6,
+    "gross-margin": (171018 / 706413) * 100, ebitda: 44028e6, cash: 10727e6, debt: 44762e6, leverage: 44762 / 44028 },
+  MSFT: { revenue: 331839e6, "revenue-growth": (331839 / 281724 - 1) * 100, "gross-profit": 225465e6,
+    "gross-margin": (225465 / 331839) * 100, cash: 20935e6, debt: 40294e6 },
 };
+const grossMarginBases: Record<string, number> = { WMT: 706413e6, MSFT: 331839e6 };
 
 async function main() {
   for (const ticker of ["WMT", "MSFT"]) {
@@ -16,10 +19,14 @@ async function main() {
     const mismatches: string[] = [];
     for (const [id, expected] of Object.entries(benchmarks[ticker])) {
       const metric = result.metrics.find((item) => item.id === id);
-      const tolerance = id.includes("growth") || id === "leverage" ? 0.005 : 500_000;
+      const tolerance = id.includes("growth") || id.includes("margin") || id === "leverage" ? 0.005 : 500_000;
       if (metric?.value == null || Math.abs(metric.value - expected) > tolerance) {
         mismatches.push(`${id}: expected ${expected}, got ${metric?.value ?? "N/A"}`);
       }
+    }
+    const grossBase = result.annualTrends.at(-1)?.grossMarginBase;
+    if (grossBase == null || Math.abs(grossBase - grossMarginBases[ticker]) > 500_000) {
+      mismatches.push(`gross-margin base: expected ${grossMarginBases[ticker]}, got ${grossBase ?? "N/A"}`);
     }
     console.log(JSON.stringify({
       ticker,

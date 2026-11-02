@@ -5,12 +5,18 @@ import type { CompanyFacts, Submissions, XbrlEntry } from "../src/lib/sec";
 
 const cik = "0000001234";
 let accession = 0;
+const filingAccessions = new Map<string, string>();
+function resetRows() { accession = 0; filingAccessions.clear(); }
 function row(start: string | undefined, end: string, val: number, form: "10-K" | "10-Q", fp: string): XbrlEntry {
-  accession += 1;
-  return { start, end, val, form, fp, fy: Number(end.slice(0, 4)), filed: `${Number(end.slice(0, 4)) + 1}-02-01`, accn: `0000001234-25-${String(accession).padStart(6, "0")}` };
+  const filing = `${form}:${end}`;
+  if (!filingAccessions.has(filing)) {
+    accession += 1;
+    filingAccessions.set(filing, `0000001234-25-${String(accession).padStart(6, "0")}`);
+  }
+  return { start, end, val, form, fp, fy: Number(end.slice(0, 4)), filed: `${Number(end.slice(0, 4)) + 1}-02-01`, accn: filingAccessions.get(filing)! };
 }
 function fixture(withDepreciation = true): { facts: CompanyFacts; submissions: Submissions } {
-  accession = 0;
+  resetRows();
   function duration(annual2024: number, annual2025: number, q2024: number[], q2025: number[]) {
     const result: XbrlEntry[] = [];
     for (const [year, annualValue, quarters] of [[2024, annual2024, q2024], [2025, annual2025, q2025]] as const) {
@@ -85,7 +91,7 @@ test("derived Q4 retains both same-start filing inputs", () => {
 });
 
 test("Walmart benchmark uses total revenues, includes short borrowings, and keeps filing provenance", () => {
-  accession = 0;
+  resetRows();
   const annual = (values: [number, number, number]) => ({
     label: "Reported", units: { USD: values.map((value, index) =>
       row(`${2023 + index}-02-01`, `${2024 + index}-01-31`, value * 1e6, "10-K", "FY")) },
@@ -94,6 +100,8 @@ test("Walmart benchmark uses total revenues, includes short borrowings, and keep
   const gaap: CompanyFacts["facts"]["us-gaap"] = {
     Revenues: annual([648125, 680985, 713163]),
     RevenueFromContractWithCustomerExcludingAssessedTax: annual([642637, 674538, 706413]),
+    CostOfGoodsAndServicesSold: annual([490142, 511753, 535395]),
+    GrossProfit: annual([152495, 162785, 171018]),
     OperatingIncomeLoss: annual([27012, 29348, 29825]),
     DepreciationDepletionAndAmortization: annual([11853, 12973, 14203]),
     CashAndCashEquivalentsAtCarryingValue: instant(10727),
@@ -106,6 +114,12 @@ test("Walmart benchmark uses total revenues, includes short borrowings, and keep
   const result = buildFinancials("0000104169", facts, submissions);
   const metric = (id: string) => result.metrics.find((item) => item.id === id)!;
   assert.equal(metric("revenue").value, 713163e6);
+  assert.equal(metric("gross-profit").value, 171018e6);
+  assert.ok(Math.abs((metric("gross-margin").value ?? 0) - 171018 / 706413 * 100) < 1e-9);
+  assert.equal(result.annualTrends.at(-1)?.grossMarginBase, 706413e6);
+  assert.equal(metric("gross-profit").status, "reported");
+  assert.equal(result.facts.find((fact) => fact.id === result.annualTrends.at(-1)?.grossMarginBaseFactIds?.[0])?.concept,
+    "RevenueFromContractWithCustomerExcludingAssessedTax");
   assert.equal(metric("ebitda").value, 44028e6);
   assert.equal(metric("debt").value, 44762e6);
   assert.ok(Math.abs((metric("leverage").value ?? 0) - 44762 / 44028) < 1e-9);
@@ -114,4 +128,30 @@ test("Walmart benchmark uses total revenues, includes short borrowings, and keep
   assert.equal(metric("revenue").inputFactIds.length, 1);
   assert.equal(result.facts.find((fact) => fact.id === metric("revenue").inputFactIds[0])?.concept, "Revenues");
   assert.ok(result.sources.every((source) => source.url.startsWith("https://www.sec.gov/Archives/edgar/")));
+});
+
+test("Microsoft-style gross margin uses total revenue and can derive gross profit from cost", () => {
+  const { facts, submissions } = fixture();
+  const gaap = facts.facts["us-gaap"];
+  gaap.Revenues = { label: "Revenue", units: { USD: [row("2025-01-01", "2025-12-31", 120, "10-K", "FY")] } };
+  gaap.CostOfRevenue = { label: "Cost of revenue", units: { USD: [row("2025-01-01", "2025-12-31", 40, "10-K", "FY")] } };
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "gross-profit")?.value, 80);
+  assert.ok(Math.abs((result.metrics.find((item) => item.id === "gross-margin")?.value ?? 0) - 80 / 120 * 100) < 1e-9);
+  assert.equal(result.metrics.find((item) => item.id === "gross-profit")?.status, "calculated");
+});
+
+test("gross margin is unavailable when cost does not share the sales period or filing", () => {
+  const { facts, submissions } = fixture();
+  const gaap = facts.facts["us-gaap"];
+  const cost = row("2025-01-01", "2025-12-31", 40, "10-K", "FY");
+  cost.start = "2025-02-01";
+  gaap.CostOfRevenue = { label: "Cost of revenue", units: { USD: [cost] } };
+  let result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "gross-margin")?.value, null);
+
+  cost.start = "2025-01-01";
+  cost.accn = "0000001234-25-999999";
+  result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "gross-margin")?.value, null);
 });
