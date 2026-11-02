@@ -59,6 +59,31 @@ test("does not invent EBITDA or leverage when depreciation is missing", () => {
   assert.match(result.warnings.join(" "), /Depreciation/);
 });
 
+test("does not combine facts whose fiscal periods only share an end date", () => {
+  const { facts, submissions } = fixture();
+  const operating = facts.facts["us-gaap"].OperatingIncomeLoss.units.USD;
+  const fy2025 = operating.find((entry) => entry.end === "2025-12-31" && entry.fp === "FY")!;
+  fy2025.start = "2025-02-01";
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.value, null);
+  assert.equal(result.metrics.find((item) => item.id === "leverage")?.value, null);
+  assert.equal(result.annualTrends.at(-1)?.ebitda, null);
+  assert.equal(result.quarterlyTrends.at(-1)?.ebitda, null);
+});
+
+test("derived Q4 retains both same-start filing inputs", () => {
+  const { facts, submissions } = fixture();
+  const result = buildFinancials(cik, facts, submissions);
+  const q4 = result.quarterlyTrends.at(-1)!;
+  const inputs = q4.revenueFactIds.map((id) => result.facts.find((fact) => fact.id === id)!);
+  assert.equal(q4.revenue, 36);
+  assert.equal(inputs.length, 2);
+  assert.deepEqual(inputs.map((input) => [input.start, input.end]), [
+    ["2025-01-01", "2025-12-31"],
+    ["2025-01-01", "2025-09-30"],
+  ]);
+});
+
 test("Walmart benchmark uses total revenues, includes short borrowings, and keeps filing provenance", () => {
   accession = 0;
   const annual = (values: [number, number, number]) => ({

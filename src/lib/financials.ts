@@ -2,7 +2,7 @@ import { filingUrl, type CompanyFacts, type Submissions, type XbrlEntry } from "
 import type { FinancialFact, Metric, Source, TrendPoint } from "./types";
 
 type Selected = { concept: string; entry: XbrlEntry; inputs?: Selected[] };
-type Series = { end: string; value: number; selections: Selected[] };
+type Series = { start?: string; end: string; value: number; selections: Selected[] };
 
 const CONCEPTS = {
   // Prefer the reported top line when an issuer separately presents net sales and other income.
@@ -21,6 +21,10 @@ const CONCEPTS = {
 
 function days(start: string, end: string): number {
   return Math.round((Date.parse(end) - Date.parse(start)) / 86_400_000);
+}
+
+function nextDay(date: string): string {
+  return new Date(Date.parse(date) + 86_400_000).toISOString().slice(0, 10);
 }
 
 function entries(facts: CompanyFacts, concept: string): XbrlEntry[] {
@@ -46,7 +50,7 @@ function latestByEnd(concept: string, values: XbrlEntry[]): Series[] {
   }
   return [...byEnd.values()]
     .sort((a, b) => a.end.localeCompare(b.end))
-    .map((entry) => ({ end: entry.end, value: entry.val, selections: [{ concept, entry }] }));
+    .map((entry) => ({ start: entry.start, end: entry.end, value: entry.val, selections: [{ concept, entry }] }));
 }
 
 function annual(facts: CompanyFacts, concept: string | null): Series[] {
@@ -86,6 +90,7 @@ function quarterly(facts: CompanyFacts, concept: string | null): Series[] {
       .sort((a, b) => b.end.localeCompare(a.end) || b.filed.localeCompare(a.filed))[0];
     if (previous) {
       byEnd.set(current.end, {
+        start: nextDay(previous.end),
         end: current.end,
         value: current.value - previous.val,
         selections: [current.selections[0], { concept, entry: previous }],
@@ -108,6 +113,7 @@ function quarterly(facts: CompanyFacts, concept: string | null): Series[] {
       .sort((a, b) => b.end.localeCompare(a.end) || b.filed.localeCompare(a.filed))[0];
     if (nineMonths) {
       byEnd.set(year.end, {
+        start: nextDay(nineMonths.end),
         end: year.end,
         value: year.value - nineMonths.val,
         selections: [year.selections[0], { concept, entry: nineMonths }],
@@ -136,13 +142,19 @@ function pointForEnd(series: Series[], end: string): Series | undefined {
   return series.find((point) => point.end === end);
 }
 
+function pointForPeriod(series: Series[], period: Series): Series | undefined {
+  return series.find((point) => point.start === period.start && point.end === period.end);
+}
+
 function valueYoY(series: Series[], index: number, quarterlyMode: boolean): number | null {
   const current = series[index];
   const previous = quarterlyMode
-    ? series.find((point) => point.end < current.end && Math.abs(days(point.end, current.end) - 365) <= 30)
+    ? series.find((point) => point.end < current.end && point.start && current.start &&
+      Math.abs(days(point.end, current.end) - 365) <= 30 && Math.abs(days(point.start, current.start) - 365) <= 30)
     : series[index - 1];
   if (!previous || previous.value === 0) return null;
-  if (!quarterlyMode && Math.abs(days(previous.end, current.end) - 365) > 45) return null;
+  if (!quarterlyMode && (Math.abs(days(previous.end, current.end) - 365) > 45 ||
+    !previous.start || !current.start || Math.abs(days(previous.start, current.start) - 365) > 45)) return null;
   return ((current.value / previous.value) - 1) * 100;
 }
 
@@ -206,14 +218,15 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
 
   function trend(revenues: Series[], operations: Series[], depreciations: Series[], isQuarterly: boolean): TrendPoint[] {
     return revenues.map((revenue, index) => {
-      const operation = pointForEnd(operations, revenue.end);
-      const depreciation = pointForEnd(depreciations, revenue.end);
+      const operation = pointForPeriod(operations, revenue);
+      const depreciation = pointForPeriod(depreciations, revenue);
       const ebitda = operation && depreciation ? operation.value + depreciation.value : null;
       const previous = isQuarterly
-        ? revenues.find((point) => point.end < revenue.end && Math.abs(days(point.end, revenue.end) - 365) <= 30)
+        ? revenues.find((point) => point.end < revenue.end && point.start && revenue.start &&
+          Math.abs(days(point.end, revenue.end) - 365) <= 30 && Math.abs(days(point.start, revenue.start) - 365) <= 30)
         : revenues[index - 1];
-      const previousOperation = previous && pointForEnd(operations, previous.end);
-      const previousDepreciation = previous && pointForEnd(depreciations, previous.end);
+      const previousOperation = previous && pointForPeriod(operations, previous);
+      const previousDepreciation = previous && pointForPeriod(depreciations, previous);
       const previousEbitda = previousOperation && previousDepreciation ? previousOperation.value + previousDepreciation.value : null;
       return {
         period: isQuarterly ? `Q ${revenue.end}` : `FY ${revenue.end.slice(0, 4)}`,
