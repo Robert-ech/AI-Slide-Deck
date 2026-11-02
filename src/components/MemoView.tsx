@@ -61,12 +61,30 @@ export default function MemoView({ memo }: { memo: Memo }) {
     return `${x},${y}`;
   }).join(" ");
   const coverage = byId.get("fccr");
+  const maturity = memo.debtMaturities?.reviewed && memo.sources.some((source) => source.id === memo.debtMaturities?.sourceId) ? memo.debtMaturities : null;
+  const maturityBuckets = maturity?.buckets.filter((bucket) => [bucket.senior, bucket.junior, bucket.unclassified].some((value) => value !== null)) ?? [];
+  const maturityMaximum = Math.max(1, ...maturityBuckets.map((bucket) => (bucket.senior ?? 0) + (bucket.junior ?? 0) + (bucket.unclassified ?? 0)));
+  const ratings = memo.creditRatings?.filter((rating) => rating.reviewed && memo.sources.some((source) => source.id === rating.sourceId)) ?? [];
+  const trends = memo.googleTrends?.reviewed && memo.sources.some((source) => source.id === memo.googleTrends?.sourceId) ? memo.googleTrends : null;
+  const trendPoints = trends?.points ?? [];
+  const usableTrendPoints = trendPoints.filter((point) => point.interest !== null);
+  const trendSegments: string[][] = [];
+  trendPoints.forEach((point, index) => {
+    if (point.interest === null) return;
+    if (index === 0 || trendPoints[index - 1].interest === null) trendSegments.push([]);
+    const x = 4 + index * (152 / Math.max(1, trendPoints.length - 1));
+    const y = 45 - point.interest * .4;
+    trendSegments.at(-1)?.push(`${x},${y}`);
+  });
   const performance = memo.insights.filter((insight) => ["performance", "growth", "context"].includes(insight.kind));
   const credit = memo.insights.filter((insight) => ["credit", "risk"].includes(insight.kind));
   const citedIds = new Set([
     ...slots.flatMap(({ metric }) => metric ? factSources(metric.inputFactIds, memo.facts) : []),
     ...factSources(annual.flatMap((point) => point.revenueFactIds), memo.facts),
     ...marginSourceIds,
+    ...(maturity ? [maturity.sourceId] : []),
+    ...ratings.map((rating) => rating.sourceId),
+    ...(trends ? [trends.sourceId] : []),
     ...memo.insights.flatMap((insight) => insight.evidenceIds),
   ]);
   const citedPublicSources = memo.sources.filter((source) => source.access === "public" && citedIds.has(source.id));
@@ -87,9 +105,22 @@ export default function MemoView({ memo }: { memo: Memo }) {
           <div className="dossier-chart-legend"><span><i className="legend-swatch" /> Revenue <Citation ids={factSources(annual.flatMap((point) => point.revenueFactIds), memo.facts)} sources={memo.sources} /></span><span><i className="legend-dash" /> Gross margin {completeMarginTrend ? <Citation ids={marginSourceIds} sources={memo.sources} /> : "N/A"}</span></div>
           {!completeMarginTrend && <p className="dossier-panel-note">Gross margin N/A · Comparable revenue and gross profit inputs have not been validated for all shown years.</p>}
         </section>
-        <section className="dossier-panel maturity-panel" aria-label="Debt maturity chart design; data unavailable"><div className="dossier-panel-head"><div><span>03 / DEBT PROFILE</span><h3>Debt maturities</h3></div><span className="panel-period">DESIGN PREVIEW</span></div><div className="dossier-maturity-skeleton" aria-hidden="true"><i /><i /><i /><i /><i /></div><div className="dossier-skeleton-labels" aria-hidden="true"><span>Y1</span><span>Y2</span><span>Y3</span><span>Y4</span><span>Y5+</span></div><p className="dossier-panel-note"><b>N/A</b> · Maturity schedule and senior/junior split await filing review. Outlined bars show layout only.</p></section>
+        <section className="dossier-panel maturity-panel" aria-label="Debt maturity schedule"><div className="dossier-panel-head"><div><span>03 / DEBT PROFILE</span><h3>Debt maturities</h3></div><span className="panel-period">{maturityBuckets.length ? maturity?.asOf : "N/A"}</span></div>
+          {maturityBuckets.length ? <><div className="dossier-maturity-bars">{maturityBuckets.map((bucket, index) => {
+            const total = (bucket.senior ?? 0) + (bucket.junior ?? 0) + (bucket.unclassified ?? 0);
+            const height = total === 0 ? 0 : Math.max(4, total / maturityMaximum * 74);
+            return <div className="dossier-maturity-bucket" key={`${bucket.label}-${index}`} title={`${bucket.label}: ${money(total * 1e6)} scheduled principal`}><b>{money(total * 1e6)}</b><div className="dossier-maturity-stack" style={{ height: `${height}px` }}>
+              {bucket.unclassified !== null && bucket.unclassified > 0 && <i className="maturity-unclassified" style={{ height: `${bucket.unclassified / total * 100}%` }} />}
+              {bucket.junior !== null && bucket.junior > 0 && <i className="maturity-junior" style={{ height: `${bucket.junior / total * 100}%` }} />}
+              {bucket.senior !== null && bucket.senior > 0 && <i className="maturity-senior" style={{ height: `${bucket.senior / total * 100}%` }} />}
+            </div><span>{bucket.label}</span></div>;
+          })}</div><div className="dossier-maturity-legend"><span><i className="maturity-senior" /> Senior</span><span><i className="maturity-junior" /> Junior</span><span><i className="maturity-unclassified" /> Unclassified</span></div><p className="dossier-panel-note">{maturity!.basis} · USD millions <Citation ids={[maturity!.sourceId]} sources={memo.sources} /></p></> : <p className="dossier-panel-note dossier-empty-panel"><b>N/A</b> · {memo.debtMaturities ? "Imported maturity schedule awaits analyst review or has no usable buckets." : "No reviewed, source-linked debt maturity schedule has been imported."}</p>}
+        </section>
       </div>
-      <section className="dossier-panel trends-panel" aria-label="Google Trends chart design; data unavailable"><div><span>04 / EXTERNAL SIGNAL</span><h3>Google search interest</h3><p>Company-specific Google Trends data has not been added. The future chart will show interest over time with its query, region, period, and source.</p></div><div className="dossier-trends-design"><svg viewBox="0 0 150 42" aria-hidden="true"><path d="M0 41H150M0 20H150M0 1H150" className="trend-grid" /><path d="M1 31 23 29 45 33 66 15 87 22 108 9 129 18 149 7" className="trend-ghost" /></svg><strong>N/A · DESIGN ONLY</strong></div></section>
+      <section className="dossier-panel trends-panel" aria-label="Google Trends search interest"><div><span>04 / EXTERNAL SIGNAL</span><h3>Google search interest</h3>{trends && usableTrendPoints.length >= 2 ? <p>Query “{trends.query}” · {trends.geography} · {trends.periodStart} to {trends.periodEnd} · retrieved {trends.retrievedAt}. Relative search interest, indexed 0–100. <Citation ids={[trends.sourceId]} sources={memo.sources} /></p> : <p><b>N/A</b> · {memo.googleTrends ? "Imported Google Trends data awaits review or lacks two usable observations." : "No reviewed Google Trends export has been imported."}</p>}</div>
+        {trends && usableTrendPoints.length >= 2 && <div className="dossier-trends-chart"><svg viewBox="0 0 160 50" role="img" aria-label={`Google Trends search interest for ${trends.query}, ${trends.periodStart} to ${trends.periodEnd}`}><path d="M4 45H156M4 25H156M4 5H156" className="trend-grid" />{trendSegments.map((segment, index) => segment.length > 1 ? <polyline points={segment.join(" ")} className="trend-data" key={index} /> : <circle cx={segment[0]?.split(",")[0]} cy={segment[0]?.split(",")[1]} r="2" className="trend-point" key={index} />)}</svg><div><span>{trends.periodStart}</span><span>{trends.periodEnd}</span></div></div>}
+      </section>
+      <div className="dossier-rating-row"><span>CREDIT RATING</span>{ratings.length ? ratings.slice(0, 2).map((rating, index) => <p key={`${rating.agency}-${rating.scope}-${index}`}><strong>{rating.agency} {rating.rating}</strong> · {rating.scope} · {rating.asOf} <Citation ids={[rating.sourceId]} sources={memo.sources} /></p>) : <p><strong>N/A</strong> · No dated, reviewed issuer or debt rating has been added.</p>}</div>
       <p className="dossier-method">EBITDA and leverage measures use the stated source and formula; estimates are not covenant calculations. Missing values are not inferred. Financial figures retain their filing trail.</p>
     </PageFrame>
     <PageFrame memo={memo} page={2} title="Business perspective">
