@@ -22,9 +22,9 @@ function factSources(ids: string[], facts: FinancialFact[]): string[] {
 }
 
 function Citation({ ids, sources }: { ids: string[]; sources: Source[] }) {
-  const matches = ids.map((id) => sources.find((source) => source.id === id)).filter((source): source is Source => Boolean(source));
-  if (!matches.length) return <span className="dossier-uncited">Source review needed</span>;
-  return <span className="dossier-citations">{matches.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id} title={source.title}>[{sources.indexOf(source) + 1}]</a>)}</span>;
+  const matches = [...new Set(ids)].map((id) => sources.find((source) => source.id === id)).filter((source): source is Source => Boolean(source));
+  if (!matches.length || matches.length !== new Set(ids).size) return <span className="dossier-uncited">Source review needed</span>;
+  return <span className="dossier-citations">{matches.map((source) => <a href={source.url} target="_blank" rel="noreferrer" key={source.id} title={source.title} aria-label={`Source ${sources.indexOf(source) + 1}: ${source.title}`}>[{sources.indexOf(source) + 1}]</a>)}</span>;
 }
 
 function PageFrame({ memo, page, title, children }: { memo: Memo; page: 1 | 2; title: string; children: React.ReactNode }) {
@@ -76,8 +76,11 @@ export default function MemoView({ memo }: { memo: Memo }) {
     const y = 45 - point.interest * .4;
     trendSegments.at(-1)?.push(`${x},${y}`);
   });
-  const performance = memo.insights.filter((insight) => ["performance", "growth", "context"].includes(insight.kind));
+  const performance = memo.insights.filter((insight) => ["performance", "context"].includes(insight.kind));
+  const growth = memo.insights.filter((insight) => insight.kind === "growth");
   const credit = memo.insights.filter((insight) => ["credit", "risk"].includes(insight.kind));
+  const datedPublicEvidence = memo.sources.filter((source) => ["public-news", "company-release"].includes(source.kind) && source.access === "public" && source.publishedAt).slice(0, 2);
+  const industrySource = memo.industry && memo.sources.find((source) => source.id === memo.industry?.sourceId);
   const citedIds = new Set([
     ...slots.flatMap(({ metric }) => metric ? factSources(metric.inputFactIds, memo.facts) : []),
     ...factSources(annual.flatMap((point) => point.revenueFactIds), memo.facts),
@@ -86,8 +89,10 @@ export default function MemoView({ memo }: { memo: Memo }) {
     ...ratings.map((rating) => rating.sourceId),
     ...(trends ? [trends.sourceId] : []),
     ...memo.insights.flatMap((insight) => insight.evidenceIds),
+    ...datedPublicEvidence.map((source) => source.id),
+    ...(industrySource ? [industrySource.id] : []),
   ]);
-  const citedPublicSources = memo.sources.filter((source) => source.access === "public" && citedIds.has(source.id));
+  const citedSources = memo.sources.filter((source) => citedIds.has(source.id));
 
   return <div className="dossier-preview" id="print-memo">
     <div className="dossier-preview-note"><span className="preview-pip" /> Two-page layout preview <span>·</span> Available figures are sourced; unfinished sections show N/A</div>
@@ -124,15 +129,15 @@ export default function MemoView({ memo }: { memo: Memo }) {
       <p className="dossier-method">EBITDA and leverage measures use the stated source and formula; estimates are not covenant calculations. Missing values are not inferred. Financial figures retain their filing trail.</p>
     </PageFrame>
     <PageFrame memo={memo} page={2} title="Business perspective">
-      <div className="dossier-section-title"><span>05 / ANALYST READOUT</span><p>Why the numbers moved · what deserves follow-up</p></div>
-      <div className="dossier-lede"><span>THE QUESTION</span><p>What does the evidence tell us about the company&apos;s financial position and the business behind it?</p></div>
+      <div className="dossier-section-title"><span>05 / ANALYST READOUT</span><p>Business drivers · credit questions · source trail</p></div>
+      <div className="dossier-lede"><span>THE READOUT</span><p>What changed at {memo.company.name}, and what does the evidence suggest a banker should examine next?</p></div>
       <div className="dossier-narrative-grid">
-        <section className="dossier-narrative-section"><span>01</span><h3>Performance &amp; drivers</h3>{performance.length ? performance.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} /></p>) : <p>Source-backed explanation pending analyst research.</p>}</section>
-        <section className="dossier-narrative-section"><span>02</span><h3>Credit view &amp; risks</h3>{credit.length ? credit.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} /></p>) : <p>Source-backed credit observations pending analyst research.</p>}</section>
+        <section className="dossier-narrative-section"><span>01</span><h3>Performance &amp; drivers</h3>{performance.length ? performance.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} />{!insight.reviewed && <small className="dossier-draft-tag">Draft · analyst review pending</small>}</p>) : <p>N/A · A source-backed explanation of revenue changes is pending.</p>}</section>
+        <section className="dossier-narrative-section"><span>02</span><h3>Credit view &amp; risks</h3>{credit.length ? credit.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} />{!insight.reviewed && <small className="dossier-draft-tag">Draft · analyst review pending</small>}</p>) : <p>N/A · Source-backed credit and risk observations are pending.</p>}</section>
       </div>
-      <div className="dossier-followup"><div><span>OPPORTUNITIES / FOLLOW-UP</span><h3>Questions for the next pass</h3></div><p>Review drivers of revenue change, liquidity restrictions, debt maturities, and market demand with the underlying filings and public evidence. No opportunity conclusion has been asserted without a source.</p></div>
-      <section className="dossier-source-section"><div className="dossier-section-title"><span>06 / SOURCE REGISTER</span><p>Numbered references used in this draft</p></div><ol>{citedPublicSources.map((source) => <li key={source.id}><span>[{memo.sources.indexOf(source) + 1}]</span><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><small>{source.publishedAt ?? "Date unavailable"}</small></li>)}</ol></section>
-      {memo.industry && <p className="dossier-industry-note">Licensed industry reference: {memo.industry.reportTitle}. This material remains local and is excluded from AI generation.</p>}
+      <div className="dossier-followup"><div><span>OPPORTUNITIES / FOLLOW-UP</span><h3>Growth signals to test</h3></div><div>{growth.length ? growth.map((insight) => <p key={insight.id}>{insight.text} <Citation ids={insight.evidenceIds} sources={memo.sources} />{!insight.reviewed && <small className="dossier-draft-tag">Draft · analyst review pending</small>}</p>) : <p>N/A · No source-backed opportunity or growth signal has been reviewed. Test commercial upside separately before drawing a conclusion.</p>}</div></div>
+      <div className="dossier-context-grid"><section><span>INDUSTRY CONTEXT</span>{memo.industry && industrySource ? <p>{memo.industry.summary} <Citation ids={[industrySource.id]} sources={memo.sources} /><small>{industrySource.access === "licensed" ? "Licensed reference · local use only" : "Public reference"}{memo.industry.publicationDate ? ` · ${memo.industry.publicationDate}` : ""}</small></p> : <p>N/A · No attributable industry analysis has been added.</p>}</section><section><span>DATED PUBLIC EVIDENCE</span>{datedPublicEvidence.length ? datedPublicEvidence.map((source) => <p key={source.id}>{source.publishedAt} · {source.title} <Citation ids={[source.id]} sources={memo.sources} />{source.reviewed !== true && <small>Source review pending</small>}</p>) : <p>N/A · No dated public news or company release has been added.</p>}</section></div>
+      <section className="dossier-source-section"><div className="dossier-section-title"><span>06 / SOURCE REGISTER</span><p>Every numbered reference used in this draft</p></div><ol>{citedSources.map((source) => <li key={source.id}><span>[{memo.sources.indexOf(source) + 1}]</span><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><small>{source.publishedAt ?? "Date N/A"} · {source.access}</small></li>)}</ol>{!citedSources.length && <p className="dossier-empty-data">N/A · No valid source references are attached.</p>}</section>
     </PageFrame>
   </div>;
 }
