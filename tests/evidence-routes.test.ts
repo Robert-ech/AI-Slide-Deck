@@ -27,14 +27,14 @@ test("manual evidence routes validate identity and persist imported records", as
     const post = (url: string, body: unknown) => new NextRequest(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
     const wrongCompany = await postMaturities(post("http://localhost/api/memos/route-memo/maturities", {
-      ticker: "WMT", asOf: "2026-06-30", basis: "Scheduled principal payments", reviewed: true, sourceId: "sec-10k",
+      ticker: "WMT", asOf: "2026-06-30", currency: "USD", scale: "millions", basis: "Scheduled principal payments", reviewed: true, sourceId: "sec-10k",
       buckets: [{ label: "FY2027", fiscalYear: 2027, senior: 100, junior: null, unclassified: null }],
     }), context);
     assert.equal(wrongCompany.status, 400);
     assert.equal(getMemo(memo.id)?.debtMaturities, undefined);
 
     const maturities = await postMaturities(post("http://localhost/api/memos/route-memo/maturities", {
-      ticker: "MSFT", asOf: "2026-06-30", basis: "Scheduled principal payments", reviewed: true, sourceId: "sec-10k",
+      ticker: "MSFT", asOf: "2026-06-30", currency: "USD", scale: "millions", basis: "Scheduled principal payments", reviewed: true, sourceId: "sec-10k",
       buckets: [{ label: "FY2027", fiscalYear: 2027, senior: 100, junior: null, unclassified: null }],
     }), context);
     assert.equal(maturities.status, 200);

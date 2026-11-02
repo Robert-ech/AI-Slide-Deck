@@ -22,6 +22,9 @@ export const trendsInputSchema = z.object({
   if (value.periodEnd > value.retrievedAt) {
     ctx.addIssue({ code: "custom", message: "Trend period ends after retrieval date.", path: ["retrievedAt"] });
   }
+  if (value.retrievedAt > new Date().toISOString().slice(0, 10)) {
+    ctx.addIssue({ code: "custom", message: "Google Trends retrieval date cannot be in the future.", path: ["retrievedAt"] });
+  }
   try {
     const url = new URL(value.source.url);
     if (url.hostname !== "trends.google.com" || !url.pathname.startsWith("/trends")) {
@@ -105,6 +108,8 @@ export function parseGoogleTrendsCsv(
   }
   const points: GoogleTrendsPoint[] = [];
   let previousDate = "";
+  let firstObserved = "";
+  let lastObserved = "";
   for (const row of rows.slice(headerIndex + 1)) {
     if (row.length !== 2) throw new Error("Google Trends CSV has a row with an unexpected number of columns.");
     const interval = intervalFromLabel(row[0]);
@@ -113,6 +118,8 @@ export function parseGoogleTrendsCsv(
     }
     if (interval.start <= previousDate) throw new Error("Google Trends dates must be unique and ascending.");
     previousDate = interval.start;
+    if (!firstObserved) firstObserved = interval.start;
+    lastObserved = interval.end;
     const value = row[1];
     if (value === "" || value === "<1") {
       points.push({ date: interval.start, interest: null, note: value === "<1" ? "Export reports <1; exact value unavailable." : "No value in export." });
@@ -124,6 +131,9 @@ export function parseGoogleTrendsCsv(
   }
   if (points.length < 2 || !points.some((point) => point.interest !== null)) {
     throw new Error("Google Trends CSV needs at least two dates and one reported index.");
+  }
+  if (firstObserved !== expected.periodStart || lastObserved !== expected.periodEnd) {
+    throw new Error(`Stated Trends period must match CSV observation coverage (${firstObserved} to ${lastObserved}).`);
   }
   return points;
 }

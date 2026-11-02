@@ -4,6 +4,7 @@ import type { CreditRating, DebtMaturitySchedule, Memo, Source } from "./types";
 
 const isoDate = z.iso.date();
 const nonNegativeAmount = z.number().finite().nonnegative().nullable();
+const today = () => new Date().toISOString().slice(0, 10);
 
 export function isValidEvidenceUrl(value: string): boolean {
   try {
@@ -41,6 +42,8 @@ const bucketInput = z.object({
 export const maturityInputSchema = z.object({
   ticker: z.string().trim().min(1).max(12),
   asOf: isoDate,
+  currency: z.literal("USD"),
+  scale: z.literal("millions"),
   basis: z.string().trim().min(5).max(240),
   reviewed: z.boolean(),
   buckets: z.array(bucketInput).min(1).max(30),
@@ -48,6 +51,9 @@ export const maturityInputSchema = z.object({
   sourceId: sourceReference.shape.sourceId,
   source: sourceReference.shape.source,
 }).strict().superRefine((value, ctx) => {
+  if (value.asOf > today()) {
+    ctx.addIssue({ code: "custom", message: "Maturity source date cannot be in the future.", path: ["asOf"] });
+  }
   if (Boolean(value.sourceId) === Boolean(value.source)) {
     ctx.addIssue({ code: "custom", message: "Provide exactly one sourceId or source.", path: ["source"] });
   }
@@ -82,7 +88,14 @@ export const ratingInputSchema = z.object({
   note: z.string().trim().max(500).optional(),
   sourceId: sourceReference.shape.sourceId,
   source: sourceReference.shape.source,
-}).strict().refine((value) => Boolean(value.sourceId) !== Boolean(value.source), "Provide exactly one sourceId or source.");
+}).strict().superRefine((value, ctx) => {
+  if (Boolean(value.sourceId) === Boolean(value.source)) {
+    ctx.addIssue({ code: "custom", message: "Provide exactly one sourceId or source.", path: ["source"] });
+  }
+  if (value.asOf > today()) {
+    ctx.addIssue({ code: "custom", message: "Rating date cannot be in the future.", path: ["asOf"] });
+  }
+});
 
 type SourceInput = z.infer<typeof sourceInputSchema>;
 
@@ -98,10 +111,14 @@ export function attachEvidenceSource(
   kind: Source["kind"],
   provenance: NonNullable<Source["provenance"]>,
   reviewed: boolean,
+  allowedExistingKinds?: ReadonlyArray<Source["kind"]>,
 ): string {
   if (reference.sourceId) {
     const existing = memo.sources.find((source) => source.id === reference.sourceId);
     if (!existing || !isValidEvidenceUrl(existing.url)) throw new Error("Unknown or invalid sourceId.");
+    if (allowedExistingKinds && !allowedExistingKinds.includes(existing.kind)) {
+      throw new Error(`Source ${reference.sourceId} is not an appropriate source for this evidence type.`);
+    }
     return existing.id;
   }
   if (!reference.source) throw new Error("A traceable source is required.");
@@ -120,11 +137,11 @@ export function attachEvidenceSource(
 export function applyMaturityImport(memo: Memo, raw: unknown): Memo {
   const input = maturityInputSchema.parse(raw);
   assertCompanyIdentity(memo, input.ticker);
-  const sourceId = attachEvidenceSource(memo, input, "analyst-document", "analyst-supplied", input.reviewed);
+  const sourceId = attachEvidenceSource(memo, input, "analyst-document", "analyst-supplied", input.reviewed, ["filing", "analyst-document"]);
   const schedule: DebtMaturitySchedule = {
     asOf: input.asOf,
-    currency: "USD",
-    scale: "millions",
+    currency: input.currency,
+    scale: input.scale,
     basis: input.basis,
     sourceId,
     reviewed: input.reviewed,
@@ -139,7 +156,7 @@ export function applyMaturityImport(memo: Memo, raw: unknown): Memo {
 export function applyRatingImport(memo: Memo, raw: unknown): Memo {
   const input = ratingInputSchema.parse(raw);
   assertCompanyIdentity(memo, input.ticker);
-  const sourceId = attachEvidenceSource(memo, input, "analyst-document", "analyst-supplied", input.reviewed);
+  const sourceId = attachEvidenceSource(memo, input, "analyst-document", "analyst-supplied", input.reviewed, ["rating-agency", "analyst-document"]);
   const rating: CreditRating = {
     agency: input.agency,
     rating: input.rating,

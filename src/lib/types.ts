@@ -2,7 +2,7 @@ export type Source = {
   id: string;
   title: string;
   url: string;
-  kind: "filing" | "public-news" | "company-release" | "industry" | "analyst-document" | "trends";
+  kind: "filing" | "public-news" | "company-release" | "industry" | "analyst-document" | "rating-agency" | "trends";
   access: "public" | "licensed";
   /** How this source entered the memo; independent from whether it is public or licensed. */
   provenance?: "sec-filing" | "publisher" | "analyst-supplied" | "google-trends-export";

@@ -14,7 +14,7 @@ function memo(): Memo {
 }
 
 const maturity = {
-  ticker: "EXM", asOf: "2026-06-30", basis: "Scheduled principal payments, not carrying value",
+  ticker: "EXM", asOf: "2026-06-30", currency: "USD", scale: "millions", basis: "Scheduled principal payments, not carrying value",
   reviewed: true, sourceId: "filing-1",
   buckets: [
     { label: "FY2027", fiscalYear: 2027, senior: null, junior: null, unclassified: 100 },
@@ -42,6 +42,11 @@ test("maturity import rejects a different company, duplicate years, and missing 
   assert.throws(() => applyMaturityImport(memo(), { ...maturity, ticker: "OTHER" }), /memo is for EXM/);
   assert.throws(() => applyMaturityImport(memo(), { ...maturity, buckets: [maturity.buckets[0], maturity.buckets[0]] }), /Duplicate maturity year/);
   assert.throws(() => applyMaturityImport(memo(), { ...maturity, sourceId: "missing" }), /Unknown or invalid sourceId/);
+  assert.throws(() => applyMaturityImport(memo(), { ...maturity, scale: undefined }), /million/);
+  assert.throws(() => applyMaturityImport(memo(), { ...maturity, asOf: "2099-01-01" }), /future/);
+  const wrongSource = memo();
+  wrongSource.sources.push({ id: "trends-1", title: "Search data", url: "https://trends.google.com/trends/explore", kind: "trends", access: "public" });
+  assert.throws(() => applyMaturityImport(wrongSource, { ...maturity, sourceId: "trends-1" }), /not an appropriate source/);
 });
 
 test("rating requires a dated scope and review state, and creates a traceable source", () => {
@@ -64,4 +69,6 @@ test("rating import rejects malformed dates, source URLs, and simultaneous sourc
   };
   assert.throws(() => applyRatingImport(memo(), input));
   assert.throws(() => applyRatingImport(memo(), { ...input, asOf: "2026-10-20", source: { title: "Bad", url: "http://example.com", access: "public" } }));
+  assert.throws(() => applyRatingImport(memo(), { ...input, asOf: "2099-01-01" }), /future/);
+  assert.throws(() => applyRatingImport(memo(), { ...input, asOf: "2026-10-20" }), /not an appropriate source/);
 });
