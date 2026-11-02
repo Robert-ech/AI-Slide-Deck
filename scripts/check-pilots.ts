@@ -17,6 +17,8 @@ async function main() {
     const bundle = await getSecBundle(ticker);
     const result = buildFinancials(bundle.company.cik, bundle.facts, bundle.submissions);
     const mismatches: string[] = [];
+    const factsById = new Map(result.facts.map((fact) => [fact.id, fact]));
+    const sourceIds = new Set(result.sources.map((source) => source.id));
     for (const [id, expected] of Object.entries(benchmarks[ticker])) {
       const metric = result.metrics.find((item) => item.id === id);
       const tolerance = id.includes("growth") || id.includes("margin") || id === "leverage" ? 0.005 : 500_000;
@@ -28,11 +30,19 @@ async function main() {
     if (grossBase == null || Math.abs(grossBase - grossMarginBases[ticker]) > 500_000) {
       mismatches.push(`gross-margin base: expected ${grossMarginBases[ticker]}, got ${grossBase ?? "N/A"}`);
     }
+    for (const metric of result.metrics) {
+      if (metric.value === null && !metric.unavailableReason) mismatches.push(`${metric.id}: N/A reason missing`);
+      if (metric.value !== null && metric.inputFactIds.length === 0) mismatches.push(`${metric.id}: available value has no filing inputs`);
+      for (const id of metric.inputFactIds) {
+        const fact = factsById.get(id);
+        if (!fact || !sourceIds.has(fact.sourceId)) mismatches.push(`${metric.id}: unresolved fact/source ${id}`);
+      }
+    }
     console.log(JSON.stringify({
       ticker,
       company: bundle.company.name,
       period: result.periodLabel,
-      metrics: result.metrics.map(({ id, value, period, status }) => ({ id, value, period, status })),
+      metrics: result.metrics.map(({ id, value, period, status, unavailableReason }) => ({ id, value, period, status, unavailableReason })),
       benchmark: mismatches.length ? { status: "mismatch", mismatches } : { status: "match" },
       warnings: result.warnings,
     }, null, 2));

@@ -156,6 +156,17 @@ test("gross margin is unavailable when cost does not share the sales period or f
   assert.equal(result.metrics.find((item) => item.id === "gross-margin")?.value, null);
 });
 
+test("a reported gross-profit fact cannot be negative or exceed its sales base", () => {
+  const { facts, submissions } = fixture();
+  const gross = row("2025-01-01", "2025-12-31", 130, "10-K", "FY");
+  facts.facts["us-gaap"].GrossProfit = { label: "Gross profit", units: { USD: [gross] } };
+  for (const value of [130, -1]) {
+    gross.val = value;
+    const result = buildFinancials(cik, facts, submissions);
+    assert.equal(result.metrics.find((item) => item.id === "gross-margin")?.value, null);
+  }
+});
+
 test("verified filing-reported EBITDA takes precedence over the standardized estimate", () => {
   const { facts, submissions } = fixture();
   facts.facts.testco = {
@@ -193,6 +204,40 @@ test("conflicting issuer EBITDA facts do not silently choose a reported value", 
   assert.equal(result.metrics.find((item) => item.id === "ebitda")?.status, "estimated");
 });
 
+test("reported EBITDA from a different accession does not override the aligned estimate", () => {
+  const { facts, submissions } = fixture();
+  const ebitda = row("2025-01-01", "2025-12-31", 45, "10-K", "FY");
+  ebitda.accn = "0000001234-25-999999";
+  facts.facts.testco = { EBITDA: { label: "EBITDA", units: { USD: [ebitda] } } };
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.value, 36);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.status, "estimated");
+});
+
+test("estimated EBITDA does not mix same-period facts from different filings", () => {
+  const { facts, submissions } = fixture();
+  const depreciation = facts.facts["us-gaap"].DepreciationDepletionAndAmortization.units.USD
+    .find((entry) => entry.end === "2025-12-31" && entry.fp === "FY")!;
+  depreciation.accn = "0000001234-25-999999";
+  const result = buildFinancials(cik, facts, submissions);
+  assert.equal(result.metrics.find((item) => item.id === "ebitda")?.value, null);
+  assert.equal(result.metrics.find((item) => item.id === "leverage")?.value, null);
+});
+
+test("aligned quarter can combine a direct fact with a cited YTD-derived fact", () => {
+  const { facts, submissions } = fixture();
+  facts.facts["us-gaap"].OperatingIncomeLoss.units.USD.push(
+    row("2025-04-01", "2025-06-30", 5, "10-Q", "Q2"),
+  );
+  const depreciationQ1 = facts.facts["us-gaap"].DepreciationDepletionAndAmortization.units.USD
+    .find((entry) => entry.end === "2025-03-31")!;
+  depreciationQ1.accn = "0000001234-25-888888";
+  const result = buildFinancials(cik, facts, submissions);
+  const q2 = result.quarterlyTrends.find((point) => point.end === "2025-06-30")!;
+  assert.equal(q2.ebitda, 8);
+  assert.equal(q2.ebitdaFactIds.length, 3);
+});
+
 test("working-capital days use two FY balances and the compatible revenue/cost basis", () => {
   const { facts, submissions } = fixture();
   const gaap = facts.facts["us-gaap"];
@@ -221,5 +266,14 @@ test("working-capital metrics stay unavailable without two comparable FY balance
     const metric = result.metrics.find((item) => item.id === id)!;
     assert.equal(metric.value, null);
     assert.match(metric.unavailableReason ?? "", /two comparable FY/);
+  }
+});
+
+test("each unavailable metric carries a concrete N/A reason", () => {
+  const { facts, submissions } = fixture(false);
+  const result = buildFinancials(cik, facts, submissions);
+  for (const metric of result.metrics.filter((item) => item.value === null)) {
+    assert.equal(metric.status, "unavailable", metric.id);
+    assert.ok(metric.unavailableReason && metric.unavailableReason.length > 20, metric.id);
   }
 });

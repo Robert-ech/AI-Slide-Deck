@@ -38,7 +38,8 @@ function entries(facts: CompanyFacts, concept: string): XbrlEntry[] {
 function selectConcept(facts: CompanyFacts, candidates: readonly string[]): string | null {
   const scored = candidates.map((concept, priority) => {
     const annual = entries(facts, concept).filter(
-      (entry) => entry.start && entry.fp === "FY" && entry.form.startsWith("10-K") && days(entry.start, entry.end) >= 330,
+      (entry) => entry.start && entry.fp === "FY" && entry.form.startsWith("10-K") &&
+        days(entry.start, entry.end) >= 330 && days(entry.start, entry.end) <= 400,
     );
     return { concept, priority, count: new Set(annual.map((entry) => entry.end)).size, latest: annual.map((entry) => entry.end).sort().at(-1) ?? "" };
   });
@@ -154,6 +155,13 @@ function sameFiling(a: Series, b: Series): boolean {
   return a.selections[0].entry.accn === b.selections[0].entry.accn;
 }
 
+function sameProvenance(a: Series, b: Series): boolean {
+  // A direct Q2 fact and a Q2 fact derived from YTD-minus-Q1 can share a valid
+  // standalone period. Their current Q2 filing must match; the derived fact's
+  // earlier Q1 accession remains separately cited in its own selections.
+  return a.selections[0].entry.accn === b.selections[0].entry.accn;
+}
+
 function reportedEbitda(facts: CompanyFacts): Series[] {
   const candidates: Series[] = [];
   for (const [namespace, concepts] of Object.entries(facts.facts)) {
@@ -197,7 +205,8 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
   const depreciationAnnual = annual(facts, depreciationConcept);
   const reportedEbitdaAnnual = reportedEbitda(facts);
   function reportedEbitdaForPeriod(period: Series): Series | undefined {
-    const matches = reportedEbitdaAnnual.filter((point) => point.start === period.start && point.end === period.end);
+    const matches = reportedEbitdaAnnual.filter((point) => point.start === period.start && point.end === period.end &&
+      sameFiling(point, period));
     if (new Set(matches.map((point) => point.value)).size !== 1) return undefined;
     return matches.sort((a, b) => b.selections[0].entry.filed.localeCompare(a.selections[0].entry.filed))[0];
   }
@@ -306,7 +315,9 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       const depreciation = pointForPeriod(depreciations, revenue);
       const gross = isQuarterly ? null : grossForPeriod(revenue);
       const reported = isQuarterly ? undefined : reportedEbitdaForPeriod(revenue);
-      const ebitda = reported?.value ?? (operation && depreciation ? operation.value + depreciation.value : null);
+      const estimated = operation && depreciation && sameProvenance(operation, depreciation) &&
+        sameProvenance(operation, revenue) ? operation.value + depreciation.value : null;
+      const ebitda = reported?.value ?? estimated;
       const previous = isQuarterly
         ? revenues.find((point) => point.end < revenue.end && point.start && revenue.start &&
           Math.abs(days(point.end, revenue.end) - 365) <= 30 && Math.abs(days(point.start, revenue.start) - 365) <= 30)
@@ -314,8 +325,10 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       const previousOperation = previous && pointForPeriod(operations, previous);
       const previousDepreciation = previous && pointForPeriod(depreciations, previous);
       const previousReported = !isQuarterly && previous ? reportedEbitdaForPeriod(previous) : undefined;
-      const previousEbitda = previousReported?.value ??
-        (previousOperation && previousDepreciation ? previousOperation.value + previousDepreciation.value : null);
+      const previousEstimate = previous && previousOperation && previousDepreciation &&
+        sameProvenance(previousOperation, previousDepreciation) && sameProvenance(previousOperation, previous)
+        ? previousOperation.value + previousDepreciation.value : null;
+      const previousEbitda = previousReported?.value ?? previousEstimate;
       return {
         period: isQuarterly ? `Q ${revenue.end}` : `FY ${revenue.end.slice(0, 4)}`,
         end: revenue.end,
@@ -324,7 +337,7 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
         revenueYoY: valueYoY(revenues, index, isQuarterly),
         ebitdaYoY: ebitda !== null && previousEbitda ? ((ebitda / previousEbitda) - 1) * 100 : null,
         revenueFactIds: register(revenue.selections),
-        ebitdaFactIds: reported ? register(reported.selections) : operation && depreciation
+        ebitdaFactIds: reported ? register(reported.selections) : estimated !== null && operation && depreciation
           ? register([...operation.selections, ...depreciation.selections]) : [],
         ...(isQuarterly ? {} : {
           grossProfit: gross?.profit ?? null,
@@ -381,22 +394,25 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
     : null;
   const ttmAligned = Boolean(latestDebtEnd && trailingFour.at(-1)?.end === latestDebtEnd);
   const annualAligned = Boolean(latestDebtEnd && latestAnnual?.end === latestDebtEnd);
+  const useTtm = ttmAligned && ttmEbitda !== null && !isReportedEbitda;
   const leverageEbitda = annualAligned && isReportedEbitda ? latestAnnual?.ebitda ?? null
-    : ttmAligned ? ttmEbitda : annualAligned ? latestAnnual?.ebitda ?? null : null;
+    : useTtm ? ttmEbitda : annualAligned ? latestAnnual?.ebitda ?? null : null;
   const leverageInputs = annualAligned && isReportedEbitda ? latestAnnual?.ebitdaFactIds ?? []
-    : ttmAligned ? trailingFour.flatMap((point) => point.ebitdaFactIds)
+    : useTtm ? trailingFour.flatMap((point) => point.ebitdaFactIds)
       : annualAligned ? latestAnnual?.ebitdaFactIds ?? [] : [];
   const metrics: Metric[] = [
     {
       id: "revenue", label: "Revenue", period: latestAnnual?.period ?? "Latest FY", value: latestAnnual?.revenue ?? null,
       unit: "USD", formula: "Reported annual revenue", inputFactIds: latestAnnual?.revenueFactIds ?? [],
       status: latestAnnual?.revenue != null ? "reported" : "unavailable",
+      unavailableReason: latestAnnual?.revenue == null ? "No annual revenue fact with an eligible 10-K period was mapped." : undefined,
     },
     {
       id: "revenue-growth", label: "Revenue growth", period: latestAnnual?.period ?? "Latest FY",
       value: latestAnnual?.revenueYoY ?? null, unit: "percent", formula: "Current FY revenue / prior FY revenue − 1",
       inputFactIds: annualTrends.slice(-2).flatMap((point) => point.revenueFactIds),
       status: latestAnnual?.revenueYoY != null ? "calculated" : "unavailable",
+      unavailableReason: latestAnnual?.revenueYoY == null ? "Requires two comparable annual revenue periods with a nonzero prior amount." : undefined,
     },
     {
       id: "gross-profit", label: "Gross profit", period: latestAnnual?.period ?? "Latest FY",
@@ -404,6 +420,7 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       formula: latestGrossProfitFact?.concept === "GrossProfit" ? "Reported gross profit" : "Compatible sales base − cost of revenue or sales",
       inputFactIds: latestAnnual?.grossProfitFactIds ?? [],
       status: latestAnnual?.grossProfit == null ? "unavailable" : latestGrossProfitFact?.concept === "GrossProfit" ? "reported" : "calculated",
+      unavailableReason: latestAnnual?.grossProfit == null ? "No reconciled, same-period gross-profit or compatible sales-and-cost basis was found." : undefined,
       note: "Gross margin may use a narrower net-sales base than headline total revenue. See cited source concepts.",
     },
     {
@@ -411,6 +428,7 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       value: latestAnnual?.grossMargin ?? null, unit: "percent", formula: "Gross profit / compatible sales base",
       inputFactIds: [...(latestAnnual?.grossProfitFactIds ?? []), ...(latestAnnual?.grossMarginBaseFactIds ?? [])],
       status: latestAnnual?.grossMargin == null ? "unavailable" : "calculated",
+      unavailableReason: latestAnnual?.grossMargin == null ? "Requires supported gross profit and its compatible cited sales denominator." : undefined,
       note: "The denominator follows the cited sales concept used to calculate or reconcile gross profit.",
     },
     {
@@ -418,20 +436,24 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
       unit: "USD", formula: isReportedEbitda ? "Filing-reported EBITDA (issuer definition)" : "Operating income + depreciation and amortization",
       inputFactIds: latestAnnual?.ebitdaFactIds ?? [],
       status: latestAnnual?.ebitda == null ? "unavailable" : isReportedEbitda ? "reported" : "estimated",
-      note: isReportedEbitda ? "Issuer-reported measure; review the filing definition before comparison or covenant use."
+      unavailableReason: latestAnnual?.ebitda == null ? "No same-period, same-filing reported EBITDA or separable operating income and depreciation inputs were found." : undefined,
+      note: isReportedEbitda ? "Issuer-defined filing measure; analyst review of its definition is pending before comparison or covenant use."
         : "This is a standardized estimate, not a company-reported or covenant-defined EBITDA.",
     },
     {
-      id: "ebitda-margin", label: "Estimated EBITDA margin", period: latestAnnual?.period ?? "Latest FY",
+      id: "ebitda-margin", label: isReportedEbitda ? "Reported EBITDA margin" : "Estimated EBITDA margin", period: latestAnnual?.period ?? "Latest FY",
       value: latestAnnual?.ebitda != null && latestAnnual.revenue ? (latestAnnual.ebitda / latestAnnual.revenue) * 100 : null,
       unit: "percent", formula: isReportedEbitda ? "Reported EBITDA / revenue" : "Estimated EBITDA / revenue",
       inputFactIds: [...(latestAnnual?.ebitdaFactIds ?? []), ...(latestAnnual?.revenueFactIds ?? [])],
       status: latestAnnual?.ebitda != null && latestAnnual.revenue ? isReportedEbitda ? "calculated" : "estimated" : "unavailable",
+      unavailableReason: latestAnnual?.ebitda != null && latestAnnual.revenue ? undefined
+        : "Requires same-period available EBITDA and nonzero annual revenue.",
     },
     {
       id: "cash", label: "Cash and equivalents", period: latestCash?.end ?? "Latest filing", value: latestCash?.value ?? null,
       unit: "USD", formula: "Reported cash and cash equivalents", inputFactIds: latestCash ? register(latestCash.selections) : [],
       status: latestCash ? "reported" : "unavailable",
+      unavailableReason: latestCash ? undefined : "No tagged cash-and-equivalents balance was found in a 10-K or 10-Q.",
     },
     {
       id: "inventory-days", label: "Inventory days on hand", period: latestAnnual?.period ?? "Latest FY", value: inventoryDays,
@@ -443,31 +465,36 @@ export function buildFinancials(cik: string, facts: CompanyFacts, submissions: S
     },
     {
       id: "receivables-days", label: "Receivables days on hand", period: latestAnnual?.period ?? "Latest FY", value: receivablesDays,
-      unit: "days", formula: "Average beginning/end net trade receivables / compatible FY sales base × FY days",
+      unit: "days", formula: "Average beginning/end tagged net receivables / compatible FY sales base × FY days",
       inputFactIds: receivablesPair && latestGross
         ? [...register(receivablesPair.flatMap((point) => point.selections)), ...register(latestGross.baseSelections)] : [],
       status: receivablesDays == null ? "unavailable" : "calculated",
-      unavailableReason: receivablesDays == null ? "Requires two comparable FY net trade receivable balances and a cited sales base." : undefined,
+      unavailableReason: receivablesDays == null ? "Requires two comparable FY tagged net receivable balances and a cited sales base." : undefined,
+      note: "Screening measure; confirm whether the issuer's receivables tag includes nontrade amounts before comparison.",
     },
     {
       id: "debt", label: shortDebt ? "Interest-bearing debt" : "Long-term debt subtotal", period: latestDebtEnd ?? "Latest filing", value: totalDebt,
       unit: "USD", formula: shortDebt ? "Short-term borrowings + current and noncurrent long-term debt" : "Current + noncurrent long-term debt",
       inputFactIds: register(debtSelections),
       status: totalDebt !== null ? "calculated" : "unavailable",
+      unavailableReason: totalDebt === null ? "Requires current and noncurrent long-term debt components at the same balance-sheet date." : undefined,
       note: totalDebt === null ? "Both long-term debt components must be reported for the same date." : debtNote,
     },
     {
       id: "leverage", label: shortDebt ? "Gross leverage estimate" : "Long-term leverage estimate", period: latestDebtEnd ?? "Latest filing",
       value: totalDebt !== null && leverageEbitda && leverageEbitda > 0 ? totalDebt / leverageEbitda : null,
       unit: "multiple", formula: annualAligned && isReportedEbitda ? "Included debt / same-date filing-reported EBITDA"
-        : ttmAligned ? "Included debt / trailing-four-quarter estimated EBITDA" : "Included debt / same-date FY estimated EBITDA",
+        : useTtm ? "Included debt / trailing-four-quarter estimated EBITDA" : "Included debt / same-date FY estimated EBITDA",
       inputFactIds: [...register(debtSelections), ...leverageInputs],
       status: totalDebt !== null && leverageEbitda && leverageEbitda > 0 ? "estimated" : "unavailable",
+      unavailableReason: totalDebt === null ? "Included debt is unavailable at a single balance-sheet date."
+        : !leverageEbitda || leverageEbitda <= 0 ? "Requires positive EBITDA aligned to the debt balance-sheet date." : undefined,
       note: `${debtNote} Not a covenant-defined leverage ratio.`,
     },
     {
       id: "fccr", label: "Fixed charge coverage", period: "Definition pending", value: null,
       unit: "multiple", formula: "Pending client-approved definition and input mapping", inputFactIds: [], status: "unavailable",
+      unavailableReason: "Awaiting Ashley's approved numerator, denominator, and required debt-service inputs.",
       note: "No ratio is calculated until Ashley approves the formula and required debt-service inputs.",
     },
   ];
