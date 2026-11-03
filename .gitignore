@@ -1,1 +1,12 @@
 .env
+.env.*
+!.env.example
+node_modules/
+.next/
+out/
+output/
+exports/
+*.tsbuildinfo
+*.log
+.DS_Store
+.playwright-cli/

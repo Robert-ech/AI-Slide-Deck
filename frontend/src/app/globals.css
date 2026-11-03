@@ -1,0 +1,31 @@
+:root{--ink:#192327;--muted:#617074;--cream:#f2f1ec;--paper:#fffefa;--line:#d8dcd9;--navy:#102e37;--teal:#246568;--copper:#ad7045}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:20px}
+html,body{margin:0;min-height:100%;background:var(--cream);color:var(--ink)}
+body{font-family:"Avenir Next","Trebuchet MS",sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+button,input{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.5}a{color:inherit}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid #b88459;outline-offset:4px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.skip-link{position:fixed;left:12px;top:-60px;z-index:10;background:var(--paper);color:var(--navy);padding:12px}.skip-link:focus{top:12px}
+.app-shell{display:grid;grid-template-columns:310px minmax(0,1fr);min-height:100vh}
+.sidebar{background:var(--navy);color:#f4f4ed;padding:29px 25px 22px;display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;scrollbar-width:thin}
+.sidebar-rule{height:1px;background:#426068;margin:27px 0 25px;flex-shrink:0}
+.sidebar-section-label,.eyebrow,.tiny-label{font-size:9px;letter-spacing:.17em;font-weight:800}
+.sidebar-section-label{display:flex;justify-content:space-between;color:#b9c9c6}.sidebar-section-label span{color:#89aaa6}
+.side-intro h2{font:400 32px/1.07 "Iowan Old Style",Baskerville,Georgia,serif;letter-spacing:-.04em;margin:23px 0 13px}.side-intro h2 em{color:#bbd2c7;font-weight:400}.side-intro p{color:#aec3c1;font-size:12px;line-height:1.6;margin:0 0 24px}
+.side-block{border-top:1px solid #44616a;padding:19px 0 21px}.side-block-heading{display:flex;gap:12px;align-items:baseline;margin-bottom:16px}.side-block-heading>span{color:#a4c5c2;font-size:10px}.side-block-heading h3{font-size:14px;margin:0;font-weight:600}
+.side-block label{display:block;font-size:9px;letter-spacing:.15em;color:#b1cac7;margin-bottom:8px}
+.ticker-box{background:#fffefa;display:flex;align-items:center;color:var(--navy)}.ticker-box input{border:0;min-width:0;width:100%;height:44px;background:transparent;padding:0 12px;font-size:12px}.ticker-box input::placeholder{color:#788885}.ticker-box button{border:0;background:none;font-size:24px;padding:4px 11px;color:var(--navy)}
+.suggestions{background:#fffefa;color:var(--ink);margin-top:3px;max-height:150px;overflow:auto}.suggestions button{width:100%;display:flex;gap:12px;background:transparent;border:0;text-align:left;padding:10px;border-bottom:1px solid var(--line);font-size:11px}.suggestions span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--muted)}.suggestions button:hover,.suggestions button[aria-selected=true]{background:#e2eee8}
+.side-hint{font-size:10px;line-height:1.5;color:#aac3bf;margin:10px 0 0}
+.sidebar-foot{margin-top:auto;padding-top:20px;display:flex;gap:8px;color:#91b0a9;font-size:9px}
+.main-panel{padding:34px;min-width:0;outline:none}.topbar{display:flex;justify-content:space-between;align-items:center;gap:20px;border-bottom:1px solid #c9d4ce;padding-bottom:27px;margin-bottom:26px}.topbar .eyebrow{color:var(--teal)}.topbar h1{font:400 32px/1.1 "Iowan Old Style",Baskerville,Georgia,serif;letter-spacing:-.04em;margin:10px 0 0}.topbar-actions{display:flex;align-items:center;justify-content:end;gap:17px;flex-wrap:wrap}
+.outline-button{white-space:nowrap;background:transparent;border:1px solid #94aaa5;color:#173943;font-size:10px;font-weight:800;padding:10px 14px}.outline-button:hover{background:#e1e9e3}
+.workspace-grid{display:grid;grid-template-columns:minmax(0,1fr) 250px;gap:22px;align-items:start}.memo-column{min-width:0}.canvas-toolbar{display:flex;justify-content:space-between;align-items:end;gap:18px;margin:0 0 18px}.canvas-toolbar .eyebrow{color:#82988f}.canvas-toolbar h2{font:400 26px "Iowan Old Style",Baskerville,Georgia,serif;letter-spacing:-.04em;margin:8px 0 0}
+.right-rail{display:grid;gap:15px}.rail-card{background:#e8ede7;border:1px solid #d5ded6;padding:19px}.rail-card .eyebrow{color:#628078}.rail-card h3{font:400 23px/1.12 "Iowan Old Style",Baskerville,Georgia,serif;letter-spacing:-.035em;margin:13px 0 11px}.rail-card p{color:#63756e;font-size:11px;line-height:1.6;margin:0 0 15px}.rail-line{display:flex;justify-content:space-between;gap:8px;border-top:1px solid #c6d3c9;padding:11px 0;font-size:8px;letter-spacing:.08em;color:#668078}.rail-line b{color:#1e4b50}.rail-line:last-child{padding-bottom:0}
+.source-register a{display:flex;gap:7px;align-items:baseline;text-decoration:none;border-top:1px solid #cbd7cf;padding:11px 0}.source-register a>span{font-size:9px;color:#2c6164;font-weight:800}.source-register a p{margin:0;flex:1;font-size:10px;color:#445a52;line-height:1.45}.source-register a small{display:block;margin-top:5px;color:#788d81;font-size:9px}.source-register a b{font-size:11px;color:#617f72}.source-register a:hover p{text-decoration:underline;text-underline-offset:3px}
+.alert{padding:13px 16px;display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;margin-bottom:20px;background:#fff2e6;color:#784b32}.alert button{border:0;background:none;color:inherit;font-size:20px}
+@media(max-width:1200px){.workspace-grid{grid-template-columns:minmax(0,1fr)}.right-rail{grid-template-columns:repeat(3,minmax(0,1fr));margin-top:24px}.topbar-actions{gap:9px}.rail-card{padding:16px}}
+@media(max-width:850px){.app-shell{display:block}.sidebar{position:relative;height:auto}.main-panel{padding:25px 15px}.topbar{align-items:start;gap:12px;padding-bottom:22px}.topbar h1{font-size:28px}.topbar-actions{flex-direction:column;align-items:end;gap:10px}.outline-button{padding:9px 10px;font-size:9px}.workspace-grid{display:block}.right-rail{grid-template-columns:1fr}.canvas-toolbar h2{font-size:25px}.sidebar-foot{padding-top:18px}.rail-card{padding:21px}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+@media print{html,body{background:white!important}.app-shell{display:block}.sidebar,.topbar,.canvas-toolbar,.right-rail,.alert,.skip-link{display:none!important}.main-panel{padding:0!important}.workspace-grid{display:block}.memo-column{width:100%}}
