@@ -3,15 +3,21 @@ Source check + metrics table for the AI Pitch Deck memo.
 Pulls every metric in the proposal from every source that can supply it and prints
 one table: Metric | Source | Value | Note (note = how it was derived / filing citation).
 
-Usage:  python source_check.py [TICKER]
+Usage:  python source_check.py [TICKER] [ttm|fy] [--json] [--out PATH]
+  --json  also write the memo JSON (shape of sample_output.json) to output_<TICKER>.json
+  --out   write the JSON to PATH instead (implies --json)
 Keys go in a .env file next to this script (copy .env.example); real env vars also work.
 A missing key just skips that source:
   SEC_USER_AGENT  e.g. "Your Name your@email.com"   (EDGAR requires it)
   FMP_API_KEY, FINNHUB_API_KEY, NEWSAPI_KEY, FRED_API_KEY
 Install: pip install -r requirements.txt
 """
+import argparse
+import json
+import math
 import os
 import re
+import statistics
 import sys
 import time
 from collections import OrderedDict
@@ -26,10 +32,14 @@ try:  # keys live in a .env file next to this script (see .env.example)
 except ImportError:
     pass
 
-TICKER = (sys.argv[1] if len(sys.argv) > 1 else "AAPL").upper()
-PERIOD = (sys.argv[2] if len(sys.argv) > 2 else "ttm").lower()   # "ttm" or "fy"
-if PERIOD not in ("ttm", "fy"):
-    sys.exit("Second argument must be 'ttm' (default) or 'fy'")
+_ap = argparse.ArgumentParser(description="Collect metrics from every source; print a table; optionally write the memo JSON")
+_ap.add_argument("ticker", nargs="?", default="AAPL")
+_ap.add_argument("period", nargs="?", default="ttm", type=str.lower, choices=["ttm", "fy"],
+                 help="period used by the printed table (the JSON always has 3 fiscal years + most current)")
+_ap.add_argument("--json", action="store_true", help="write output_<TICKER>.json")
+_ap.add_argument("--out", metavar="PATH", help="JSON output path (implies --json)")
+ARGS = _ap.parse_args()
+TICKER, PERIOD = ARGS.ticker.upper(), ARGS.period
 TIMEOUT = 20
 FCCR_THRESHOLD = 1.25
 
@@ -57,6 +67,10 @@ HEADLINES = []                              # (date, source, tag, title, url)
 ISSUES = []                                 # (source, what, error)
 STATUS = OrderedDict()
 CTX = {"name": TICKER, "sector": ""}
+BREAKDOWN = {}      # metric -> {"date": ..., "items": [{"name", "value", "share"}]}  (FMP segments)
+FRED_DATES = {}     # metric -> observation date
+FB = {}             # fallback statements for SEC line items: provider -> raw statement data
+
 
 
 def add(metric, source, value, note=""):
@@ -118,23 +132,35 @@ def growth(a, b):
     return None if r is None else r - 1
 
 
+class Num(str):
+    """Display text for the table that also carries the unrounded number (.raw) for the JSON."""
+    def __new__(cls, text, raw=None):
+        o = super().__new__(cls, text)
+        o.raw = raw
+        return o
+
+
+def lab(n, suffix):
+    return Num(f"{n}{suffix}", getattr(n, "raw", None))
+
+
 def fm(x):
     if x is None:
-        return "n/a"
+        return Num("n/a")
     s = "-" if x < 0 else ""
     a = abs(x)
     for k, u in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
         if a >= k:
-            return f"{s}${a / k:,.2f}{u}"
-    return f"{s}${a:,.0f}"
+            return Num(f"{s}${a / k:,.2f}{u}", x)
+    return Num(f"{s}${a:,.0f}", x)
 
 
 def fx(x):
-    return "n/a" if x is None else f"{x:.2f}x"
+    return Num("n/a") if x is None else Num(f"{x:.2f}x", x)
 
 
 def fp(x):  # x is a fraction
-    return "n/a" if x is None else f"{x * 100:.1f}%"
+    return Num("n/a") if x is None else Num(f"{x * 100:.1f}%", x)
 
 
 def pct_in(x):  # Finnhub reports percents already
@@ -337,6 +363,7 @@ def collect_edgar():
     if not m:
         raise RuntimeError(f"{TICKER} not in EDGAR ticker map (non-US filer?)")
     CTX["name"] = clean_name(m["title"])
+    CTX["cik"] = str(m["cik_str"]).zfill(10)
     time.sleep(0.2)
     facts = get_json(f"https://data.sec.gov/api/xbrl/companyfacts/CIK{str(m['cik_str']).zfill(10)}.json",
                      headers=H)["facts"]
@@ -347,6 +374,7 @@ def collect_edgar():
         raise RuntimeError("no annual revenue found in XBRL facts")
     fy_ends = sorted({e for (_, e) in ann}, reverse=True)
     fe = fy_ends[0]
+    CTX["facts"] = facts
     arow = next(r for (s, e), r in ann.items() if e == fe)
     p_fy = fy_pack(facts, fe)
     if PERIOD == "ttm":
@@ -408,6 +436,14 @@ def collect_edgar():
         + ("; principal ESTIMATED from current debt" if est else "")
         + miss(p, "interest", "capex", "taxes") + f" | {fy}")
 
+    if fccr is None:
+        gaps = [n for n, v in (("EBITDA", d["ebitda"]), ("interest", g("interest")), ("principal", principal)) if v is None]
+        us = facts.get("us-gaap", {})
+        cand = sorted((t for t in us if "Interest" in t and ("Expense" in t or "Paid" in t)),
+                      key=lambda t: max((r["end"] for u in us[t]["units"].values() for r in u), default=""), reverse=True)[:8]
+        ISSUES.append(("EDGAR", f"FCCR is n/a, missing: {', '.join(gaps)}",
+                       "interest-related us-gaap tags this company does file: " + (", ".join(cand) or "none")
+                       + " (add the right one to FY_TAGS['interest'] if it is the interest expense)"))
     add("Net debt / EBITDA", S, fx(d["lev"]), f"(total debt - cash - ST investments) / EBITDA | {fy}")
     trend = []
     for e in sorted(fy_ends[:4]):
@@ -439,7 +475,10 @@ def collect_fmp():
     rt = first(attempt(S, "ratios-ttm", lambda: call("ratios-ttm")))
     ann = attempt(S, "income-statement annual", lambda: call("income-statement", period="annual", limit=4)) or []
     qtr = attempt(S, "income-statement quarter", lambda: call("income-statement", period="quarter", limit=5)) or []
-    bs = first(attempt(S, "balance-sheet annual", lambda: call("balance-sheet-statement", period="annual", limit=1)))
+    bs_all = attempt(S, "balance-sheet annual", lambda: call("balance-sheet-statement", period="annual", limit=4)) or []
+    bs = first(bs_all)
+    cf_all = attempt(S, "cash-flow annual", lambda: call("cash-flow-statement", period="annual", limit=4)) or []
+    FB["FMP"] = {"income": ann, "cash": cf_all, "bs": bs_all}
     CTX["sector"] = CTX["sector"] or (prof.get("sector") or "")
 
     if ann:
@@ -476,6 +515,9 @@ def collect_fmp():
             tot = sum(nums.values())
             top = sorted(nums.items(), key=lambda kv: -kv[1])[:3]
             if tot and top:
+                BREAKDOWN[metric] = {"date": first(x).get("date") or first(x).get("fiscalYear"),
+                                     "items": [{"name": k, "value": v, "share": v / tot}
+                                               for k, v in sorted(nums.items(), key=lambda kv: -kv[1])]}
                 add(metric, S, f"top: {top[0][0]} {fp(top[0][1] / tot)}",
                     "; ".join(f"{k} {fp(v / tot)}" for k, v in top) + f" (FY {first(x).get('fiscalYear', first(x).get('date'))})")
 
@@ -499,7 +541,7 @@ def collect_finnhub():
     add("Net margin", S, fp(pct_in(m.get("netProfitMarginTTM"))), "TTM")
     add("Current ratio", S, fx(m.get("currentRatioQuarterly")), "latest quarter")
     add("Quick ratio", S, fx(m.get("quickRatioQuarterly")), "latest quarter")
-    add("Beta", S, "n/a" if m.get("beta") is None else f"{m['beta']:.2f}", "/stock/metric")
+    add("Beta", S, Num("n/a") if m.get("beta") is None else Num(f"{m['beta']:.2f}", m["beta"]), "/stock/metric")
 
 
 # --------------------------------------------------------------------------- yfinance
@@ -514,6 +556,9 @@ def collect_yfinance():
     if CTX["name"] == TICKER and info.get("shortName"):
         CTX["name"] = clean_name(info["shortName"])
 
+    FB["yfinance"] = {k: attempt(S, k, lambda a=a: getattr(t, a)) for k, a in (
+        ("income", "income_stmt"), ("cash", "cashflow"), ("bs", "balance_sheet"),
+        ("qincome", "quarterly_income_stmt"), ("qcash", "quarterly_cashflow"), ("qbs", "quarterly_balance_sheet"))}
     eb, td, tc = info.get("ebitda"), info.get("totalDebt"), info.get("totalCash")
     nd = None if td is None or tc is None else td - tc
     add("EBITDA", S, fm(eb), "Yahoo TTM field")
@@ -538,7 +583,7 @@ def collect_yfinance():
     q = rev_series(attempt(S, "quarterly_income_stmt", lambda: t.quarterly_income_stmt))
     a = rev_series(attempt(S, "income_stmt", lambda: t.income_stmt))
     if info.get("revenueGrowth") is not None:
-        add("Revenue YoY", S, f"{fp(info['revenueGrowth'])} (Yahoo)", "Yahoo field revenueGrowth (latest quarter YoY)")
+        add("Revenue YoY", S, lab(fp(info['revenueGrowth']), " (Yahoo)"), "Yahoo field revenueGrowth (latest quarter YoY)")
     if q:
         add("Revenue (latest quarter)", S, fm(q[0]), "quarterly_income_stmt")
         add("Revenue QoQ", S, fp(growth(q[0], q[1]) if len(q) > 1 else None), "latest vs prior quarter")
@@ -550,11 +595,13 @@ def collect_yfinance():
     px = attempt(S, "price history", lambda: yf.download(list(dict.fromkeys([TICKER, "SPY"])), period="1y",
                                                          auto_adjust=True, progress=False)["Close"].dropna())
     if px is not None and TICKER in px:
+        CTX["px_end"] = str(px.index[-1])[:10]
         r = px.pct_change().dropna()
         if "SPY" in px and TICKER != "SPY":
-            add("Beta", S, f"{r[TICKER].cov(r['SPY']) / r['SPY'].var():.2f} (calc)", "1y daily returns vs SPY")
+            b = float(r[TICKER].cov(r['SPY']) / r['SPY'].var())
+            add("Beta", S, Num(f"{b:.2f} (calc)", b), "1y daily returns vs SPY")
         if info.get("beta") is not None:
-            add("Beta", S, f"{info['beta']:.2f} (Yahoo)", "Yahoo field")
+            add("Beta", S, Num(f"{info['beta']:.2f} (Yahoo)", info["beta"]), "Yahoo field")
         add("Annualized volatility", S, fp(float(r[TICKER].std() * np.sqrt(252))), "1y daily returns")
         add("Max drawdown (1y)", S, fp(float((px[TICKER] / px[TICKER].cummax() - 1).min())), "1y closing prices")
 
@@ -569,7 +616,9 @@ def collect_fred():
              "sort_order": "desc", "limit": 5}))
         obs = [o for o in (data or {}).get("observations", []) if o["value"] != "."]
         if obs:
-            add(metric, "FRED", f"{float(obs[0]['value']):.2f}{unit}", f"series {sid}, {obs[0]['date']}")
+            FRED_DATES[metric] = obs[0]["date"]
+            add(metric, "FRED", Num(f"{float(obs[0]['value']):.2f}{unit}", float(obs[0]["value"])),
+                f"series {sid}, {obs[0]['date']}")
 
 
 # --------------------------------------------------------------------------- news
@@ -650,6 +699,626 @@ def print_table():
     print("Type: direct = returned by the source as-is; derived = computed here from other values")
 
 
+
+# --------------------------------------------------------------------------- fallbacks for SEC line items
+# When EDGAR has no value for a line item (e.g. Apple stopped tagging interest expense), fill it from
+# the other sources, most reliable first: FMP (as-reported statements), then yfinance.
+# Only fills gaps; an SEC value is never overwritten. Fallback values carry a per-value "source".
+FALLBACK_ORDER = ["FMP", "yfinance"]
+OUTFLOW = {"capex", "interest_paid", "taxes_paid", "dividends", "buybacks", "debt_repaid", "interest_expense"}
+NO_ZERO = {"interest_expense", "interest_paid"}   # providers return 0 when they have nothing; treat as missing
+FMP_MAP = {
+    "income": {"revenue": "revenue", "cogs": "costOfRevenue", "gross_profit": "grossProfit",
+               "sga": "sellingGeneralAndAdministrativeExpenses", "operating_income": "operatingIncome",
+               "net_income": "netIncome", "da": "depreciationAndAmortization", "interest_expense": "interestExpense",
+               "income_tax_expense": "incomeTaxExpense", "pretax_income": "incomeBeforeTax"},
+    "cash": {"cfo": "netCashProvidedByOperatingActivities", "capex": "capitalExpenditure", "interest_paid": "interestPaid",
+             "taxes_paid": "incomeTaxesPaid", "dividends": "netDividendsPaid", "buybacks": "commonStockRepurchased",
+             "debt_repaid": "debtRepayment"},
+    "bs": {"cash": "cashAndCashEquivalents", "st_investments": "shortTermInvestments", "receivables": "netReceivables",
+           "inventory": "inventory", "payables": "accountPayables", "current_assets": "totalCurrentAssets",
+           "current_liabilities": "totalCurrentLiabilities", "total_assets": "totalAssets",
+           "total_liabilities": "totalLiabilities", "equity": "totalStockholdersEquity",
+           "liabilities_and_equity": "totalLiabilitiesAndTotalEquity"},
+}
+YF_MAP = {
+    "income": {"revenue": "Total Revenue", "cogs": "Cost Of Revenue", "gross_profit": "Gross Profit",
+               "sga": "Selling General And Administration", "operating_income": "Operating Income",
+               "net_income": "Net Income", "da": "Reconciled Depreciation", "interest_expense": "Interest Expense",
+               "income_tax_expense": "Tax Provision", "pretax_income": "Pretax Income"},
+    "cash": {"cfo": "Operating Cash Flow", "capex": "Capital Expenditure", "interest_paid": "Interest Paid Supplemental Data",
+             "taxes_paid": "Income Tax Paid Supplemental Data", "dividends": "Cash Dividends Paid",
+             "buybacks": "Repurchase Of Capital Stock", "debt_repaid": "Repayment Of Debt", "debt_issued": "Issuance Of Debt"},
+    "bs": {"cash": "Cash And Cash Equivalents", "st_investments": "Other Short Term Investments",
+           "receivables": "Accounts Receivable", "inventory": "Inventory", "payables": "Accounts Payable",
+           "current_assets": "Current Assets", "current_liabilities": "Current Liabilities",
+           "total_assets": "Total Assets", "total_liabilities": "Total Liabilities Net Minority Interest",
+           "equity": "Stockholders Equity", "ltd_noncurrent": "Long Term Debt", "debt_current": "Current Debt"},
+}
+
+
+def _near(a, b, tol=7):
+    return abs(ddays(str(a)[:10], str(b)[:10])) <= tol
+
+
+def _yf_cell(df, label, e):
+    try:
+        if df is None or label not in df.index:
+            return None
+        for c in df.columns:
+            if _near(c, e):
+                v = df.loc[label, c]
+                return None if v != v else float(v)     # NaN -> None
+    except Exception:
+        pass
+    return None
+
+
+def _yf_ttm(df, label, e):
+    try:
+        if df is None or label not in df.index:
+            return None
+        cols = sorted(df.columns, reverse=True)
+        if len(cols) < 4 or not _near(cols[0], e):
+            return None
+        vals = [df.loc[label, c] for c in cols[:4]]
+        return None if any(v != v for v in vals) else float(sum(vals))
+    except Exception:
+        return None
+
+
+def fallback_value(name, e, flow, cur):
+    """(value, provider) from the first fallback provider that has this item for period end e.
+    cur = e is the trailing-twelve-month / latest period (a 10-Q is newer than the last 10-K)."""
+    for prov in FALLBACK_ORDER:
+        d = FB.get(prov)
+        if not d:
+            continue
+        v = None
+        if prov == "FMP" and not cur:       # FMP quarterly statements are paid, so annual only
+            for st, mp in FMP_MAP.items():
+                if name in mp:
+                    row = next((r for r in d.get(st) or [] if _near(r.get("date", "0000-00-00"), e)), None)
+                    v = row.get(mp[name]) if row else None
+        elif prov == "yfinance":
+            for st, mp in YF_MAP.items():
+                if name in mp:
+                    if cur:
+                        v = (_yf_ttm if flow else _yf_cell)(d.get("q" + st), mp[name], e)
+                    else:
+                        v = _yf_cell(d.get(st), mp[name], e)
+        if v is None or not isinstance(v, (int, float)):
+            continue
+        if name in OUTFLOW:
+            v = abs(v)
+        if v == 0 and name in NO_ZERO:
+            continue
+        return v, prov
+    return None, None
+
+
+# --------------------------------------------------------------------------- filing text (MD&A and debt note)
+# Verbatim excerpts from the latest 10-K and 10-Q, cleaned and selected by topic. Nothing is summarized
+# here; the memo layer writes the explanations and cites these excerpts.
+TEXT_BUDGET = 60000        # characters across all excerpts
+EXCERPT_MAX = 3500         # characters per excerpt
+PARA_MAX = 1200            # a single longer paragraph is cut at a sentence end and marked [...]
+DEBT_RE = re.compile(r"\b(debt|borrowings?|credit (facilit|agreement)|financing arrangements|notes payable)", re.I)
+ITEM_RE = re.compile(r"^\s*item\s*(\d{1,2}[AB]?)\s*[\.\:\-–—]?\s*(.{0,150})$", re.I)
+NOTE_RE = re.compile(r"^\s*(?:note\s+)?(\d{1,2})\s*[\.\:\-–—]\s*([A-Z][A-Za-z ,\-&'’]{2,90})$", re.I)
+SEG_RE = re.compile(r"segment|geograph", re.I)
+CONC_RE = re.compile(r"concentration|major customer|significant customer|revenues?$", re.I)
+# (topic id, where, keywords, metrics it explains, max paragraphs)
+# where: mdna = Item 7 (10-Q: Item 2), mrisk = Item 7A (10-Q: Item 3), business = Item 1, risks = Item 1A,
+# debt / segments / concentration = the matching note to the financial statements
+# order matters: specific topics come first so generic ones (results, liquidity) do not take their paragraphs
+TOPICS = [
+    ("debt_note", ["debt"], ["interest", "rate", "sofr", "floating", "variable", "fixed", "matur", "term loan",
+                             "senior notes", "revolving", "credit agreement", "covenant", "principal"],
+     ["interest_expense", "debt_rate_weighted", "floating_rate_share", "maturity_y1", "ltd_total", "fixed_charge_coverage_ratio"], 5),
+    ("covenants", ["mdna", "debt"], ["covenant", "fixed charge", "leverage ratio", "coverage ratio", "in compliance"],
+     ["fixed_charge_coverage_ratio", "net_debt_to_ebitda"], 3),
+    ("market_risk", ["mrisk"], ["interest rate", "foreign currency", "exchange rate", "hypothetical", "equity price",
+                                "fixed rate", "floating rate", "variable rate", "market risk"],
+     ["floating_rate_share", "debt_rate_weighted", "beta", "annualized_volatility"], 3),
+    ("segments_and_geography", ["mdna", "segments"], ["segment", "geograph", "region", "international", "americas", "europe",
+                                                      "asia", "united states", "by product", "by category"],
+     ["revenue_by_segment", "revenue_by_region"], 4),
+    ("customers_and_seasonality", ["concentration", "business", "mdna", "risks"],
+     ["seasonal", "fourth quarter", "holiday", "largest customer", "significant customer", "major customer",
+      "customers accounted", "accounted for", "concentration of"],
+     ["customer_concentration", "seasonality_peak_quarter_share", "revenue_quarterly"], 4),
+    ("operating_costs", ["mdna"], ["cost of revenue", "cost of sales", "cost of goods", "research and development", "selling, general",
+                                  "marketing", "depreciation", "amortization", "headcount", "freight", "tariff", "inflation"],
+     ["cogs", "sga", "da", "ebitda", "ebitda_margin", "gross_margin", "operating_margin"], 4),
+    ("cash_flows", ["mdna"], ["operating activities", "investing activities", "financing activities", "capital expenditures",
+                             "purchases of property", "free cash flow", "share repurchase", "dividends paid", "working capital"],
+     ["cfo", "capex", "dividends", "buybacks", "debt_repaid", "debt_issued", "fixed_charge_coverage_ratio"], 4),
+    ("interest_and_tax", ["mdna"], ["interest expense", "interest income", "other income", "effective tax rate", "income tax",
+                                    "provision for income taxes"],
+     ["interest_expense", "net_interest_nonoperating", "income_tax_expense", "pretax_income", "net_income"], 3),
+    ("liquidity_and_capital", ["mdna"], ["liquidity", "capital resources", "cash", "debt", "credit facility",
+                                         "commercial paper", "repay", "borrow", "interest", "dividend", "repurchase"],
+     ["cash", "st_investments", "current_ratio", "quick_ratio", "total_debt", "net_debt", "net_debt_to_ebitda"], 4),
+    ("results_of_operations", ["mdna"], ["revenue", "net sales", "gross margin", "operating income", "increase", "decrease",
+                                         "compared", "primarily", "due to", "driven by", "margin"],
+     ["revenue", "revenue_yoy", "revenue_qoq", "revenue_cagr_3y", "gross_margin", "operating_margin", "net_margin"], 4),
+]
+
+
+def html_to_lines(html):
+    """Filing HTML -> list of clean text lines (one paragraph per line); tables and XBRL header dropped."""
+    from bs4 import BeautifulSoup
+    soup = BeautifulSoup(html, "lxml")
+    for t in soup.find_all(["script", "style", "table", "head"]):
+        t.decompose()
+    for t in soup.find_all(lambda x: x.name and x.name.lower() in ("ix:header", "ix:hidden")):
+        t.decompose()
+    for t in soup.find_all(lambda x: x.name in ("span", "a", "b", "i", "u", "font", "em", "strong", "sup", "sub")
+                           or (x.name and x.name.startswith("ix:"))):
+        t.unwrap()
+    soup.smooth()
+    out = []
+    for raw in soup.get_text("\n").split("\n"):
+        ln = re.sub(r"\s+", " ", raw.replace("\xa0", " ")).strip()
+        if len(ln) < 3 or re.fullmatch(r"\d{1,3}", ln) or re.fullmatch(r"(?i)table of contents|part [iv]+", ln):
+            continue
+        if re.search(r"(?i)form 10-[kq]\s*\|\s*\d+$", ln):      # running page footers
+            continue
+        out.append(ln)
+    return out
+
+
+def find_sections(lines):
+    """Item sections and the debt note. Headings repeat in the table of contents, so the longest span wins."""
+    heads = [(i, m.group(1).upper(), m.group(2).strip()) for i, l in enumerate(lines) if (m := ITEM_RE.match(l))]
+    items = {}
+    for k, (i, num, title) in enumerate(heads):
+        end = heads[k + 1][0] if k + 1 < len(heads) else len(lines)
+        if num not in items or end - i > items[num][2] - items[num][1]:
+            items[num] = (title, i, end)
+    notes = [(i, m.group(1), m.group(2).strip()) for i, l in enumerate(lines) if (m := NOTE_RE.match(l))]
+    allnotes = []
+    for k, (i, num, title) in enumerate(notes):
+        end = notes[k + 1][0] if k + 1 < len(notes) else len(lines)
+        allnotes.append((f"Note {num}. {title}", title, lines[i + 1:min(end, i + 400)]))
+    secs = {num: (f"Item {num}. {t}".strip(" ."), lines[a + 1:b]) for num, (t, a, b) in items.items()}
+    return secs, allnotes
+
+
+def pick_note(notes, rx):
+    """The longest note whose title matches rx (headings can also appear in an index of notes)."""
+    c = [(label, body) for label, title, body in notes if rx.search(title)]
+    return max(c, key=lambda x: len(x[1])) if c else None
+
+
+def _cut(p):
+    if len(p) <= PARA_MAX:
+        return p
+    cut = max(p.rfind(". ", 0, PARA_MAX), p.rfind("; ", 0, PARA_MAX))
+    return (p[:cut + 1] if cut > 200 else p[:PARA_MAX].rsplit(" ", 1)[0]) + " [...]"
+
+
+def pick_paragraphs(lines, keywords, n):
+    scored = []
+    for i, p in enumerate(lines):
+        if len(p) < 80 or "forward-looking" in p.lower():
+            continue
+        low = p.lower()
+        hit = [k for k in keywords if k in low]
+        if not hit:
+            continue
+        sc = 2 * len(hit) + sum(low.count(k) for k in hit) + (1 if re.search(r"[$%]", p) else 0)
+        scored.append((sc, i, p))
+    best = sorted(scored, key=lambda x: (-x[0], x[1]))[:n]
+    return [p for _, _, p in sorted(best, key=lambda x: x[1])]
+
+
+def extract_excerpts(html, form, period_end, url, used=None, budget=TEXT_BUDGET):
+    """Excerpt entries for one filing. `used` is the set of paragraphs already sent (no repeats)."""
+    used = set() if used is None else used
+    secs, notes = find_sections(html_to_lines(html))
+    k = form.startswith("10-K")
+    where = {"mdna": secs.get("7" if k else "2"), "mrisk": secs.get("7A" if k else "3"),
+             "business": secs.get("1") if k else None, "risks": secs.get("1A") if k else None,
+             "debt": pick_note(notes, DEBT_RE), "segments": pick_note(notes, SEG_RE),
+             "concentration": pick_note(notes, CONC_RE)}
+    out = []
+    for tid, places, kws, supports, n in TOPICS:
+        paras, labels = [], []
+        for pl in places:
+            if where.get(pl):
+                got = [p for p in pick_paragraphs(where[pl][1], kws, n) if p not in used and p not in paras]
+                if got:
+                    labels.append(where[pl][0])     # list only the sections that contributed
+                    paras += got
+        if not paras:
+            continue
+        text, kept = "", []
+        for p in paras[:n]:
+            p = _cut(p)
+            if len(text) + len(p) + 2 > EXCERPT_MAX or len(text) + len(p) > budget:
+                break
+            text += ("\n\n" if text else "") + p
+            kept.append(p)
+        if not text:
+            continue
+        used.update(paras[:len(kept)])
+        budget -= len(text)
+        out.append({"id": f"{tid}_{form.lower()}", "topic": tid, "supports": supports, "form": form,
+                    "period_end": period_end, "section": " / ".join(dict.fromkeys(labels)), "filing": url, "text": text})
+    return out
+
+
+def collect_filing_text():
+    """Latest 10-K, plus the latest 10-Q if it is newer, fetched from EDGAR and reduced to excerpts."""
+    H = {"User-Agent": os.getenv("SEC_USER_AGENT", "")}
+    cik = CTX["cik"]
+    rec = get_json(f"https://data.sec.gov/submissions/CIK{cik}.json", headers=H)["filings"]["recent"]
+    rows = [dict(zip(rec, v)) for v in zip(*rec.values())]
+    pick_ = {}
+    for r in sorted(rows, key=lambda r: r["filingDate"], reverse=True):
+        if r["form"] in ("10-K", "10-Q") and r["form"] not in pick_ and r.get("primaryDocument"):
+            pick_[r["form"]] = r
+    if "10-K" in pick_ and "10-Q" in pick_ and pick_["10-Q"]["filingDate"] < pick_["10-K"]["filingDate"]:
+        del pick_["10-Q"]
+    used, out, budget = set(), [], TEXT_BUDGET
+    for form in ("10-Q", "10-K"):             # current period first, so its paragraphs are kept in a tie
+        r = pick_.get(form)
+        if not r:
+            continue
+        time.sleep(0.2)
+        url = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{r['accessionNumber'].replace('-', '')}/{r['primaryDocument']}"
+        resp = requests.get(url, headers=H, timeout=60)
+        resp.raise_for_status()
+        ex = extract_excerpts(resp.text, form, r.get("reportDate") or r["filingDate"], url, used, budget)
+        budget -= sum(len(e["text"]) for e in ex)
+        out += ex
+    return sorted(out, key=lambda e: (e["topic"], e["form"]))
+
+
+# --------------------------------------------------------------------------- JSON output
+# Raw SEC line items, in output order. (name, tags in priority order, kind, unit)
+# One tag per item per company: the tag with data at the latest fiscal year end wins; ties go to the
+# earlier tag in this list. Values are positive as filed. See README section 9.
+_NS = "InterestIncomeExpenseNonoperatingNet"
+_PT = "IncomeLossFromContinuingOperationsBeforeIncomeTaxes"
+SEC_ITEMS = [
+    ("revenue", TAGS_REV, "flow"),
+    ("cogs", ["CostOfGoodsAndServicesSold", "CostOfRevenue", "CostOfGoodsSold"], "flow"),
+    ("gross_profit", ["GrossProfit"], "flow"),
+    ("sga", ["SellingGeneralAndAdministrativeExpense"], "flow"),
+    ("operating_income", ["OperatingIncomeLoss"], "flow"),
+    ("net_income", ["NetIncomeLoss", "ProfitLoss"], "flow"),
+    ("da", ["DepreciationDepletionAndAmortization", "DepreciationAndAmortization",
+            "DepreciationAmortizationAndAccretionNet", "Depreciation"], "flow"),
+    ("interest_expense", ["InterestExpense", "InterestExpenseNonoperating", "InterestExpenseDebt",
+                          "InterestAndDebtExpense", "InterestCostsIncurred"], "flow"),
+    ("income_tax_expense", ["IncomeTaxExpenseBenefit"], "flow"),
+    ("pretax_income", [_PT + "ExtraordinaryItemsNoncontrollingInterest",
+                       _PT + "MinorityInterestAndIncomeLossFromEquityMethodInvestments"], "flow"),
+    ("net_interest_nonoperating", [_NS, "InterestIncomeExpenseNet"], "flow"),
+    ("cfo", ["NetCashProvidedByUsedInOperatingActivities"], "flow"),
+    ("capex", ["PaymentsToAcquirePropertyPlantAndEquipment", "PaymentsToAcquireProductiveAssets"], "flow"),
+    ("interest_paid", ["InterestPaidNet", "InterestPaid"], "flow"),
+    ("taxes_paid", ["IncomeTaxesPaidNet", "IncomeTaxesPaid"], "flow"),
+    ("dividends", ["PaymentsOfDividends", "PaymentsOfDividendsCommonStock"], "flow"),
+    ("buybacks", ["PaymentsForRepurchaseOfCommonStock"], "flow"),
+    ("debt_repaid", ["RepaymentsOfDebt", "RepaymentsOfLongTermDebt"], "flow"),
+    ("debt_issued", ["ProceedsFromIssuanceOfDebt", "ProceedsFromIssuanceOfLongTermDebt"], "flow"),
+    ("cash", ["CashAndCashEquivalentsAtCarryingValue",
+              "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"], "instant"),
+    ("st_investments", ["ShortTermInvestments", "MarketableSecuritiesCurrent",
+                        "AvailableForSaleSecuritiesDebtSecuritiesCurrent"], "instant"),
+    ("receivables", ["AccountsReceivableNetCurrent", "ReceivablesNetCurrent"], "instant"),
+    ("inventory", ["InventoryNet", "InventoryFinishedGoodsNetOfReserves"], "instant"),
+    ("payables", ["AccountsPayableCurrent"], "instant"),
+    ("current_assets", ["AssetsCurrent"], "instant"),
+    ("current_liabilities", ["LiabilitiesCurrent"], "instant"),
+    ("total_assets", ["Assets"], "instant"),
+    ("total_liabilities", ["Liabilities"], "instant"),
+    ("equity", ["StockholdersEquity", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"], "instant"),
+    ("liabilities_and_equity", ["LiabilitiesAndStockholdersEquity"], "instant"),
+    ("ltd_total", ["LongTermDebt"], "instant"),
+    ("ltd_noncurrent", ["LongTermDebtNoncurrent"], "instant"),
+    ("ltd_current", ["LongTermDebtCurrent"], "instant"),
+    ("debt_current", ["DebtCurrent"], "instant"),
+    ("short_term_borrowings", ["ShortTermBorrowings", "CommercialPaper"], "instant"),
+    ("revolver", ["LineOfCredit"], "instant"),
+    ("debt_rate_weighted", ["DebtWeightedAverageInterestRate", "LongTermDebtWeightedAverageInterestRate"], "rate"),
+    ("maturity_y1", [MAT + "InNextTwelveMonths"], "fyinstant"),
+    ("maturity_y2", [MAT + "InYearTwo"], "fyinstant"),
+    ("maturity_y3", [MAT + "InYearThree"], "fyinstant"),
+    ("maturity_y4", [MAT + "InYearFour"], "fyinstant"),
+    ("maturity_y5", [MAT + "InYearFive"], "fyinstant"),
+    ("maturity_after_y5", [MAT + "AfterYearFive"], "fyinstant"),
+    ("op_lease_liability", ["OperatingLeaseLiability"], "instant"),
+    ("op_lease_liability_current", ["OperatingLeaseLiabilityCurrent"], "instant"),
+    ("op_lease_liability_noncurrent", ["OperatingLeaseLiabilityNoncurrent"], "instant"),
+    ("op_lease_cost", ["OperatingLeaseCost", "OperatingLeasePayments"], "flow"),
+    ("finance_lease_liability", ["FinanceLeaseLiability"], "instant"),
+    ("shares_outstanding", ["EntityCommonStockSharesOutstanding"], "dei"),
+    ("diluted_shares", ["WeightedAverageNumberOfDilutedSharesOutstanding"], "fyflow_shares"),
+]
+# Items that carry 3 fiscal years + the most current period (they feed the graphs)
+HIST = {"revenue", "gross_profit", "operating_income", "net_income", "da", "cash", "st_investments",
+        "ltd_total", "short_term_borrowings"}
+UNITS = {"debt_rate_weighted": "fraction", "diluted_shares": "shares", "shares_outstanding": "shares"}
+
+
+def _has(facts, tag, end, kind, unit="USD"):
+    return value_at(facts, [tag], end, kind, unit)[0] is not None
+
+
+def pick_tag(facts, tags, kind, ends, unit="USD"):
+    """Tag with data at the most recent fiscal year end; ties go to the earlier tag in the list."""
+    vk = "annual" if kind in ("flow", "fyflow_shares") else "instant"
+    for e in ends:  # newest first
+        for t in tags:
+            if _has(facts, t, e, vk, unit):
+                return t
+    return None
+
+
+def _clean(v):
+    if v is None:
+        return None
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(v) or math.isinf(v):
+        return None
+    return int(v) if v == int(v) and abs(v) >= 1000 else v
+
+
+def build_json():
+    facts = CTX.get("facts")
+    if not facts:
+        raise RuntimeError("EDGAR data is required for the JSON (SEC_USER_AGENT missing or EDGAR failed)")
+    tag_rev, rrows = best_rows(facts, TAGS_REV)
+    ann = duration_series(rrows, 350, 380)
+    fy_ends = sorted({e for (_, e) in ann}, reverse=True)
+    fe = fy_ends[0]
+    E = max(r["end"] for r in rrows)
+    live = E > fe                       # a 10-Q is newer than the last 10-K
+    pers = sorted(fy_ends[:3]) + ([E] if live else [])
+    last = pers[-1]
+    last_basis = "ttm" if live else "fy"
+
+    # ---- raw SEC items
+    V, TAGUSED, ROWUSED = {}, {}, {}
+    for name, tags, kind in SEC_ITEMS:
+        if kind == "dei":
+            continue
+        unit = "pure" if kind == "rate" else ("shares" if kind == "fyflow_shares" else "USD")
+        if kind == "flow" and name == "revenue":
+            tags = [tag_rev]
+        tag = pick_tag(facts, tags, kind, fy_ends, unit)
+        TAGUSED[name] = tag
+        V[name] = {}
+        if kind in ("fyinstant", "rate", "fyflow_shares"):
+            ends = [fe]
+        else:
+            ends = pers
+        for e in ends:
+            v = r = None
+            if tag:
+                if kind == "flow":
+                    if live and e == E:
+                        v, _, r = ttm_flow(facts, [tag], e)
+                    else:
+                        v, _, r = value_at(facts, [tag], e, "annual")
+                elif kind == "fyflow_shares":
+                    v, _, r = value_at(facts, [tag], e, "annual", "shares")
+                else:
+                    v, _, r = value_at(facts, [tag], e, "instant", "pure" if kind == "rate" else "USD")
+            if kind == "rate" and v is not None and v >= 1:
+                v = v / 100            # some filers tag 4.1 instead of 0.041
+            V[name][e] = v
+            ROWUSED[(name, e)] = r
+    # fill SEC gaps from the other sources (FMP, then yfinance); remember where each value came from
+    SRC = {n: {e: "SEC" for e in V[n]} for n in V}
+    for name, tags, kind in SEC_ITEMS:
+        if kind not in ("flow", "instant"):
+            continue
+        for e in pers:
+            if V[name][e] is None:
+                v, prov = fallback_value(name, e, kind == "flow", live and e == E)
+                if v is not None:
+                    V[name][e], SRC[name][e] = v, prov
+    # shares outstanding (dei cover-page count, latest filed)
+    dei = facts.get("dei", {}).get("EntityCommonStockSharesOutstanding", {}).get("units", {}).get("shares", [])
+    dei = [r for r in dei if r.get("form") in FORMS]
+    sh = max(dei, key=lambda r: (r["end"], r["filed"])) if dei else None
+    shares_end = sh["end"] if sh else last
+
+    def at(name, e=None):
+        return V[name].get(e or last)
+
+    out = []
+
+    # inputs behind each derived metric, so its "source" list shows any fallback provider it relied on
+    _eb, _debt = ["operating_income", "da"], ["ltd_total", "ltd_noncurrent", "ltd_current", "debt_current", "short_term_borrowings"]
+    DI = {"ebitda": _eb, "ebitda_margin": _eb + ["revenue"], "gross_margin": ["gross_profit", "revenue"],
+          "operating_margin": ["operating_income", "revenue"], "net_margin": ["net_income", "revenue"],
+          "net_debt_to_ebitda": _eb + _debt + ["cash", "st_investments"],
+          "current_ratio": ["current_assets", "current_liabilities"],
+          "quick_ratio": ["cash", "st_investments", "receivables", "current_liabilities"],
+          "total_debt": _debt, "net_debt": _debt + ["cash", "st_investments"],
+          "fixed_charge_coverage_ratio": _eb + ["capex", "taxes_paid", "interest_expense", "interest_paid",
+                                                "ltd_current", "debt_current"]}
+
+    def entry(name, unit, vals, source=None, typ="direct", **kw):
+        if source is None:      # SEC-based entry: SEC first, then any fallback provider whose value was used
+            shown = {e for e, _, _ in vals}     # only the periods actually emitted in this entry
+            used = {SRC[n][e] for n in ([name] if name in SRC else DI.get(name, [])) for e in SRC.get(n, {})
+                    if e in shown and V[n][e] is not None}
+            source = ([x for x in ["SEC"] + FALLBACK_ORDER if x in used]) or ["SEC"]
+        vl = []
+        for e, b, v in vals:
+            d = {"period_end": e, "basis": b, "value": _clean(v)}
+            if name in SRC and v is not None and SRC[name].get(e) not in (None, "SEC"):
+                d["source"] = SRC[name][e]     # this single value came from a fallback provider
+            vl.append(d)
+        d = {"name": name, "unit": unit, "source": list(source), "type": typ, "values": vl}
+        d.update(kw)
+        out.append(d)
+
+    def basis_for(kind, e):
+        if kind == "flow":
+            return "ttm" if (live and e == E) else "fy"
+        return "latest" if (live and e == E) or kind == "instant" and e == last else "fy"
+
+    for name, tags, kind in SEC_ITEMS:
+        unit = UNITS.get(name, "usd")
+        if kind == "dei":
+            entry(name, unit, [(shares_end, "latest", sh["val"] if sh else None)])
+        elif kind in ("fyinstant", "rate", "fyflow_shares"):
+            entry(name, unit, [(fe, "latest" if kind == "rate" else "fy", V[name][fe])])
+        elif name in HIST:
+            entry(name, unit, [(e, "fy" if not (live and e == E) else basis_for(kind, e), V[name][e]) for e in pers])
+        else:
+            entry(name, unit, [(last, "ttm" if kind == "flow" and live else ("fy" if kind == "flow" else "latest"), V[name][last])])
+
+    # ---- derived from the line items
+    def sub(*xs):
+        return None if any(x is None for x in xs) else sum(xs)
+
+    def ebitda_at(e):
+        return sub(V["operating_income"][e], V["da"][e])
+
+    def debt_at(e):
+        t = V["ltd_total"][e]
+        if t is None and V["ltd_noncurrent"][e] is not None:
+            cur = V["ltd_current"][e] if V["ltd_current"][e] is not None else (V["debt_current"][e] or 0)
+            t = V["ltd_noncurrent"][e] + cur
+        return None if t is None else t + (V["short_term_borrowings"][e] or 0)
+
+    def netdebt_at(e):
+        d, c = debt_at(e), V["cash"][e]
+        return None if d is None or c is None else d - c - (V["st_investments"][e] or 0)
+
+    ser = lambda f: [(e, last_basis if e == last else "fy", f(e)) for e in pers]
+    rd = lambda x, n=4: None if x is None else round(x, n)
+    entry("ebitda", "usd", ser(ebitda_at), typ="derived")
+    entry("ebitda_margin", "fraction", ser(lambda e: rd(div(ebitda_at(e), V["revenue"][e]))), typ="derived")
+    entry("gross_margin", "fraction", ser(lambda e: rd(div(V["gross_profit"][e], V["revenue"][e]))), typ="derived")
+    entry("operating_margin", "fraction", ser(lambda e: rd(div(V["operating_income"][e], V["revenue"][e]))), typ="derived")
+    entry("net_margin", "fraction", ser(lambda e: rd(div(V["net_income"][e], V["revenue"][e]))), typ="derived")
+    entry("net_debt_to_ebitda", "x", ser(lambda e: rd(div(netdebt_at(e), ebitda_at(e)), 2)), typ="derived")
+    cl = at("current_liabilities")
+    entry("current_ratio", "x", [(last, "latest", rd(div(at("current_assets"), cl), 2))], typ="derived")
+    q = sub(at("cash"), at("receivables")) if at("cash") is not None and at("receivables") is not None else None
+    entry("quick_ratio", "x", [(last, "latest", rd(div(None if q is None else q + (at("st_investments") or 0), cl), 2))], typ="derived")
+    entry("total_debt", "usd", [(last, "latest", debt_at(last))], typ="derived")
+    entry("net_debt", "usd", [(last, "latest", netdebt_at(last))], typ="derived")
+    eb = ebitda_at(last)
+    interest = V["interest_expense"][last] if V["interest_expense"][last] is not None else V["interest_paid"][last]
+    principal = V["maturity_y1"][fe]
+    if principal is None:
+        principal = V["ltd_current"][last] if V["ltd_current"][last] is not None else V["debt_current"][last]
+    fccr = None
+    if None not in (eb, V["capex"][last], V["taxes_paid"][last], interest, principal):
+        fccr = rd(div(eb - V["capex"][last] - V["taxes_paid"][last], interest + principal), 2)
+    entry("fixed_charge_coverage_ratio", "x", [(last, last_basis, fccr)], typ="derived")
+
+    # quarterly revenue
+    ql = quarterly_with_q4(rrows)
+    qs = ql[-12:]
+    entry("revenue_quarterly", "usd", [(x["end"], "quarter", x["val"]) for x in qs], typ="derived" if any(x["derived"] for x in qs) else "direct")
+    yoy = []
+    for x in qs[-8:]:
+        pr = next((y for y in ql if 350 <= ddays(y["end"], x["end"]) <= 380), None)
+        yoy.append((x["end"], "quarter", rd(growth(x["val"], pr["val"]) if pr else None)))
+    entry("revenue_yoy", "fraction", yoy, typ="derived")
+    lat = ql[-1] if ql else None
+    entry("revenue_qoq", "fraction", [(lat["end"] if lat else last, "quarter", rd(growth(lat["val"], ql[-2]["val"]) if lat and len(ql) > 1 else None))], typ="derived")
+    entry("revenue_latest_quarter", "usd", [(lat["end"] if lat else last, "quarter", lat["val"] if lat else None)],
+          typ="derived" if lat and lat["derived"] else "direct")
+    base = next((r for (s, e), r in ann.items() if 1080 <= ddays(e, fe) <= 1110), None)
+    cagr = None if not base or not V["revenue"][fe] or base["val"] <= 0 else (V["revenue"][fe] / base["val"]) ** (1 / 3) - 1
+    entry("revenue_cagr_3y", "fraction", [(fe, "fy", rd(cagr))], typ="derived")
+    arow = next(r for (s, e), r in ann.items() if e == fe)
+    fyq = [x for x in ql if arow["start"] < x["end"] <= fe]
+    seas = None
+    if len(fyq) == 4:
+        seas = max(x["val"] for x in fyq) / sum(x["val"] for x in fyq)
+    entry("seasonality_peak_quarter_share", "fraction", [(fe, "fy", rd(seas, 2))], typ="derived")
+    entry("floating_rate_share", "fraction", [(fe, "fy", None)], typ="derived")
+    entry("customer_concentration", "fraction", [(fe, "fy", None)], typ="derived")
+
+    # ---- non-SEC metrics: median of sources that report the same thing
+    today = date.today().isoformat()
+    px_end = CTX.get("px_end", today)
+
+    def combine(mid, unit, rows, period_end, basis, keep=lambda v: True, **kw):
+        by = {}
+        for src, val, note in rows:
+            raw = getattr(val, "raw", None)
+            if raw is None or not keep(str(val)) or _clean(raw) is None:
+                continue
+            k = kind_for(METRIC_OF[mid], src, val)
+            c = by.get(src)
+            if c is None or (c[0] == "derived" and k == "direct"):
+                by[src] = (k, float(raw))
+        if not by:
+            entry(mid, unit, [(period_end, basis, None)], source=(), typ=None, disagreement_pct=None, **kw)
+            return
+        nums = [v for _, v in by.values()]
+        med = statistics.median(nums)
+        spread = round((max(nums) - min(nums)) / abs(med) * 100, 1) if len(nums) > 1 and med else None
+        types = {k for k, _ in by.values()}
+        entry(mid, unit, [(period_end, basis, round(med) if unit == "usd" else round(med, 4))],
+              source=list(by), typ=types.pop() if len(types) == 1 else "mixed", disagreement_pct=spread, **kw)
+
+    METRIC_OF = {"market_cap": "Market cap", "ev_to_ebitda": "EV/EBITDA", "beta": "Beta",
+                 "annualized_volatility": "Annualized volatility", "max_drawdown_1y": "Max drawdown (1y)",
+                 "vix": "VIX", "high_yield_spread": "High-yield spread", "yield_curve_10y_2y": "10Y-2Y yield curve",
+                 "revenue_by_segment": "Revenue by segment", "revenue_by_region": "Revenue by region"}
+    R = lambda mid: ROWS[METRIC_OF[mid]]
+    combine("market_cap", "usd", R("market_cap"), today, "live")
+    combine("ev_to_ebitda", "x", R("ev_to_ebitda"), last, "ttm" if live else "fy")
+    # beta: only the 1-year calculation vs SPY; Yahoo/Finnhub betas use a different window (5y monthly)
+    combine("beta", "ratio", R("beta"), px_end, "1y", keep=lambda t: t.endswith("(calc)"))
+    combine("annualized_volatility", "fraction", R("annualized_volatility"), px_end, "1y")
+    combine("max_drawdown_1y", "fraction", R("max_drawdown_1y"), px_end, "1y")
+    for mid, unit in (("vix", "index_points"), ("high_yield_spread", "percent_points"), ("yield_curve_10y_2y", "percent_points")):
+        combine(mid, unit, R(mid), FRED_DATES.get(METRIC_OF[mid], today), "latest")
+    for mid in ("revenue_by_segment", "revenue_by_region"):
+        b = BREAKDOWN.get(METRIC_OF[mid])
+        entry(mid, "fraction", [(str(b["date"])[:10] if b and b["date"] and len(str(b["date"])) >= 10 else fe, "fy", None)],
+              source=["FMP"] if b else (), typ="derived" if b else None, disagreement_pct=None,
+              **({"breakdown": [{"name": i["name"], "value": _clean(i["value"]), "share": round(i["share"], 4)} for i in b["items"]]} if b else {}))
+
+    # ---- filings map: period end -> SEC filing folder
+    filings = {}
+    cik = int(CTX["cik"])
+    for e in pers:   # the filing that first reported the period (later filings repeat it as a comparative)
+        cand = [r for r in rrows if r["end"] == e and "start" in r]
+        r = min(cand, key=lambda r: r["filed"]) if cand else None
+        if r:
+            filings[e] = f"https://www.sec.gov/Archives/edgar/data/{cik}/{r['accn'].replace('-', '')}/"
+    return {"company": {"name": CTX["name"], "ticker": TICKER, "cik": CTX["cik"], "as_of": last},
+            "filings": filings, "metrics": out}, TAGUSED
+
+
+def write_json(doc, path):
+    one = lambda o: json.dumps(o, separators=(", ", ": "))
+    L = ["{", f'  "company": {one(doc["company"])},', f'  "filings": {one(doc["filings"])},', '  "metrics": [']
+    n = len(doc["metrics"])
+    for i, e in enumerate(doc["metrics"]):
+        L.append("    " + one(e) + ("," if i < n - 1 else ""))
+    ft = doc.get("filing_text")
+    if ft:
+        L += ["  ],", '  "filing_text": [']
+        L += ["    " + one(e) + ("," if i < len(ft) - 1 else "") for i, e in enumerate(ft)]
+        L += ["  ]", "}"]
+    else:
+        L += ["  ]", "}"]
+    Path(path).write_text("\n".join(L) + "\n")
+
+
 if __name__ == "__main__":
     print(f"Collecting metrics for {TICKER} ...")
     run("EDGAR", collect_edgar, "SEC_USER_AGENT")
@@ -679,3 +1348,20 @@ if __name__ == "__main__":
     print("\nSOURCE STATUS")
     for k, v in STATUS.items():
         print(f"  {k:<9} {v}")
+
+    if ARGS.json or ARGS.out:
+        path = ARGS.out or f"output_{TICKER}.json"
+        try:
+            doc, used = build_json()
+            try:
+                ft = collect_filing_text()
+                if ft:
+                    doc["filing_text"] = ft
+                print(f"filing text: {len(ft)} excerpts ({', '.join(sorted({e['topic'] for e in ft})) or 'none'})")
+            except Exception as e:
+                print(f"filing text skipped: {type(e).__name__}: {str(e)[:120]}")
+            write_json(doc, path)
+            nulls = [e["name"] for e in doc["metrics"] if all(v["value"] is None for v in e["values"]) and e["name"] not in ("floating_rate_share", "customer_concentration")]
+            print(f"\nJSON written to {path}: {len(doc['metrics'])} metrics; all-null: {', '.join(nulls) or 'none'}")
+        except Exception as e:
+            print(f"\nJSON NOT written: {type(e).__name__}: {e}")
