@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { getMemo, saveMemo } from "@/lib/db";
-import { reviewProblem } from "@/lib/review";
+import { reviewProblem, sourceIsReviewed } from "@/lib/review";
 import { guardLocalMutation } from "@/lib/local-request";
 
 export const runtime = "nodejs";
@@ -38,7 +38,7 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
       if (new Set(ids).size !== ids.length) return NextResponse.json({ error: "Each source can be reviewed once per update." }, { status: 400 });
       for (const item of update.sourceReviews) {
         const source = memo.sources.find((candidate) => candidate.id === item.id);
-        if (!source || source.kind === "filing" || source.provenance !== "analyst-supplied") {
+        if (!source || source.kind === "filing" || !["analyst-supplied", "team1"].includes(source.provenance ?? "")) {
           return NextResponse.json({ error: `Source ${item.id} is not eligible for analyst review.` }, { status: 400 });
         }
       }
@@ -52,6 +52,9 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     if (update.reviewStatus === "reviewed") {
       const problem = reviewProblem(nextInsights, nextSources);
       if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+      if (memo.company.kind === "private" && nextSources.some((source) => !sourceIsReviewed(source))) {
+        return NextResponse.json({ error: "Review every private-company source before marking the memo reviewed." }, { status: 400 });
+      }
     }
     memo.insights = nextInsights;
     memo.sources = nextSources;

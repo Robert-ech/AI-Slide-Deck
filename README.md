@@ -1,6 +1,6 @@
 # Fieldnote: local credit research memo
 
-Fieldnote is a private, single-analyst Next.js workbench for public-company credit research. It helps a banker move from source material to a cited two-page memo. Walmart and Microsoft FY2026 are fixed, manually reconciled pilot previews; a newly generated memo uses the SEC data available when it runs.
+Fieldnote is a private, single-analyst Next.js workbench for public- and private-company credit research. It turns collected evidence into a cited two-page memo. Walmart and Microsoft FY2026 are fixed, manually reconciled public pilot previews; a newly generated public memo uses the SEC data available when it runs.
 
 ## Run locally
 
@@ -19,7 +19,8 @@ Open the local address printed by Next.js. The server binds to 127.0.0.1. You ca
 3. Review the two letter-sized memo pages. Page 1 shows the provisional six metrics (revenue, gross margin, EBITDA or estimated EBITDA, cash, debt, and leverage), fixed charge coverage, annual revenue and gross-margin trends, debt maturities, Google search interest, and a dated credit rating when supported. Page 2 covers business drivers, risks, opportunities, industry context, dated public evidence, and a numbered source register.
 4. Add and review evidence in the workbench. Maturity schedules, dated ratings, and Google Trends CSV exports are manual, source-linked imports. The Trends import stores the query, geography, period, retrieval date, and parsed index series, not the original CSV. Public industry context can be added with a source and analyst review; licensed IBISWorld context is optional when your account permits it.
 5. Edit draft insights and review their cited sources. A memo cannot be marked reviewed until the source and insight checks pass. Without an OpenAI key, the app creates editable local observations; with a key, it drafts public-evidence insights through the Responses API with store disabled. Analyst review is still required.
-6. Use Print / Save as PDF. The app checks that both memo pages fit before opening the browser print dialog. Choose Save as PDF there; there is no automated PDF service.
+6. For a private company, load a Team 1 evidence JSON bundle in the sidebar. The private memo presents the business, founders, funding, investors, competitors, and only supported financial measures. The [handoff contract](docs/private-handoff.md) and fictional example show the expected shape.
+7. Use Print / Save as PDF. The app checks that both memo pages fit before opening the browser print dialog. Choose Save as PDF there; there is no automated PDF service.
 
 Fixed charge coverage remains N/A until Ashley approves the formula and inputs. An absent rating, maturity breakdown, or reviewed Trends export remains N/A. The app does not manufacture a value or claim that Google Trends or rating agencies are queried automatically. The six headline measures and two-page writing density are provisional pending Ashley's feedback.
 

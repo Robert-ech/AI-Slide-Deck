@@ -2,10 +2,10 @@ export type Source = {
   id: string;
   title: string;
   url: string;
-  kind: "filing" | "public-news" | "company-release" | "industry" | "analyst-document" | "rating-agency" | "trends";
+  kind: "filing" | "public-news" | "company-release" | "industry" | "analyst-document" | "rating-agency" | "trends" | "company-website" | "funding" | "founder-profile";
   access: "public" | "licensed";
   /** How this source entered the memo; independent from whether it is public or licensed. */
-  provenance?: "sec-filing" | "publisher" | "analyst-supplied" | "google-trends-export";
+  provenance?: "sec-filing" | "publisher" | "analyst-supplied" | "google-trends-export" | "team1";
   reviewed?: boolean;
   reviewedAt?: string;
   publishedAt?: string;
@@ -121,9 +121,30 @@ export type IndustryContext = {
   sourceId: string;
 };
 
+export type EvidenceClaim = { text: string; sourceIds: string[] };
+
+export type PrivateFundingRound = {
+  stage: string;
+  announcedAt?: string;
+  amountUsd?: number;
+  investors: string[];
+  sourceIds: string[];
+};
+
+export type PrivateProfile = {
+  description: EvidenceClaim;
+  industry?: EvidenceClaim;
+  valueProposition?: EvidenceClaim;
+  businessDetails?: EvidenceClaim;
+  founders: EvidenceClaim[];
+  investors: EvidenceClaim[];
+  competitors: EvidenceClaim[];
+  fundingRounds: PrivateFundingRound[];
+};
+
 export type Memo = {
   id: string;
-  company: { name: string; ticker: string; cik: string; description?: string };
+  company: { name: string; ticker: string; cik: string; description?: string; kind?: "public" | "private" };
   generatedAt: string;
   periodLabel: string;
   facts: FinancialFact[];
@@ -133,6 +154,7 @@ export type Memo = {
   insights: Insight[];
   sources: Source[];
   industry?: IndustryContext;
+  privateProfile?: PrivateProfile;
   debtMaturities?: DebtMaturitySchedule;
   creditRatings?: CreditRating[];
   googleTrends?: GoogleTrendsSeries;

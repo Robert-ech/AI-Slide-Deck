@@ -1,0 +1,76 @@
+{
+  "company": { "name": "Harbor Gridworks — illustrative example" },
+  "description": {
+    "text": "Illustrative manufacturer of modular electrical controls for industrial customers.",
+    "sourceIds": ["site"]
+  },
+  "industry": {
+    "text": "Illustrative industrial electrical equipment market.",
+    "sourceIds": ["site"]
+  },
+  "valueProposition": {
+    "text": "Illustrative modular product line intended to shorten installation time.",
+    "sourceIds": ["site"]
+  },
+  "businessDetails": {
+    "text": "Illustrative direct sales to equipment integrators and repeat orders from industrial facilities.",
+    "sourceIds": ["site"]
+  },
+  "founders": [
+    { "text": "Illustrative founder previously led industrial product teams.", "sourceIds": ["founder"] }
+  ],
+  "investors": [
+    { "text": "Illustrative Example Capital participated in the Series A round.", "sourceIds": ["round"] }
+  ],
+  "competitors": [
+    { "text": "Illustrative competition comes from established controls suppliers.", "sourceIds": ["industry"] }
+  ],
+  "fundingRounds": [
+    {
+      "stage": "Seed", "announcedAt": "2024-04-01", "amountUsd": 5000000,
+      "investors": ["Illustrative Seed Partners"], "sourceIds": ["seed"]
+    },
+    {
+      "stage": "Series A", "announcedAt": "2026-03-01", "amountUsd": 20000000,
+      "investors": ["Illustrative Example Capital"], "sourceIds": ["round"]
+    }
+  ],
+  "financialPeriods": [
+    {
+      "label": "FY2024", "periodType": "annual", "end": "2024-12-31",
+      "sourceId": "financials", "revenueUsd": 80000000, "ebitdaUsd": 10000000
+    },
+    {
+      "label": "FY2025", "periodType": "annual", "end": "2025-12-31",
+      "sourceId": "financials", "revenueUsd": 100000000,
+      "ebitdaUsd": 12000000, "debtUsd": 24000000
+    }
+  ],
+  "sources": [
+    {
+      "id": "site", "title": "Illustrative company website", "url": "https://example.com/company",
+      "kind": "company-website", "note": "Illustrative business and product description."
+    },
+    {
+      "id": "founder", "title": "Illustrative founder profile", "url": "https://example.com/founder",
+      "kind": "founder-profile", "note": "Illustrative founder work history."
+    },
+    {
+      "id": "industry", "title": "Illustrative industry outlook", "url": "https://example.com/industry",
+      "kind": "industry", "note": "Illustrative competitive context."
+    },
+    {
+      "id": "seed", "title": "Illustrative seed announcement", "url": "https://example.com/seed",
+      "kind": "funding", "note": "Illustrative seed financing terms."
+    },
+    {
+      "id": "round", "title": "Illustrative Series A announcement", "url": "https://example.com/series-a",
+      "kind": "funding", "note": "Illustrative Series A amount and investor."
+    },
+    {
+      "id": "financials", "title": "Illustrative private financial extract",
+      "url": "https://example.com/financials", "kind": "analyst-document",
+      "access": "licensed", "note": "Illustrative annual revenue, EBITDA, and debt."
+    }
+  ]
+}
