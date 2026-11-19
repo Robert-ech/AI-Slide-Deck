@@ -94,5 +94,6 @@
 .private-handoff .private-example-button{background:transparent;color:#24545d;border:1px solid #a8beb1;margin:0 0 4px}
 .dossier-chart-grid:has(> :only-child){grid-template-columns:1fr}
 .dossier-revenue-row:not(:has(em)){grid-template-columns:43px minmax(0,1fr) 47px}
+.source-editor select{width:100%;min-width:0;background:#f9fbf6;border:1px solid transparent;padding:10px;color:#173039;font-size:11px}
 @media(max-width:650px){.private-lede,.private-two-up,.private-insights,.private-questions{grid-template-columns:1fr}.private-metric-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media print{.private-lede{grid-template-columns:1.3fr .7fr}.private-two-up,.private-insights{grid-template-columns:1fr 1fr}.private-questions{grid-template-columns:repeat(3,1fr)}.private-metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.private-section{margin-top:14px}.private-source-section li{grid-template-columns:20px minmax(0,1fr) 110px;padding:4px 0}}

@@ -371,6 +371,9 @@ export default function Workbench() {
         {sources.map((source, index) => <div className="source-editor" key={index}>
           <div className="source-editor-title"><span>SOURCE {index + 1}</span><button onClick={() => setSources((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label="Remove source">×</button></div>
           <label htmlFor={`source-title-${index}`}>TITLE</label><input id={`source-title-${index}`} placeholder="Article or release title" value={source.title} onChange={(event) => updateSource(index, "title", event.target.value)} />
+          <label htmlFor={"source-kind-" + index}>SOURCE TYPE</label><select id={"source-kind-" + index} value={source.kind} onChange={(event) => updateSource(index, "kind", event.target.value)}>
+            <option value="public-news">News</option><option value="company-release">Company release</option><option value="earnings-transcript">Earnings transcript</option>
+          </select>
           <label htmlFor={`source-url-${index}`}>PUBLIC URL</label><input id={`source-url-${index}`} type="url" placeholder="https://…" value={source.url} onChange={(event) => updateSource(index, "url", event.target.value)} />
           <label htmlFor={`source-date-${index}`}>PUBLICATION DATE · REQUIRED</label><input id={`source-date-${index}`} type="date" max={new Date().toISOString().slice(0, 10)} required value={source.publishedAt ?? ""} onChange={(event) => updateSource(index, "publishedAt", event.target.value)} />
           <label htmlFor={`source-note-${index}`}>VERIFIED EVIDENCE NOTE</label><textarea id={`source-note-${index}`} placeholder="Fact or event checked against this source" value={source.note} onChange={(event) => updateSource(index, "note", event.target.value)} rows={3} />

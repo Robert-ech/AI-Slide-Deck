@@ -15,7 +15,7 @@ const SourceInput = z.object({
   url: z.url(),
   publishedAt: z.iso.date(),
   note: z.string().min(1).max(800),
-  kind: z.enum(["public-news", "company-release"]),
+  kind: z.enum(["public-news", "company-release", "earnings-transcript"]),
 });
 const RequestSchema = z.object({
   ticker: z.string().trim().min(1).max(8).regex(/^[A-Za-z.-]+$/),

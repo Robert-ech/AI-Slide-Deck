@@ -72,11 +72,11 @@ export async function generateInsights(
       input: [
         {
           role: "system",
-          content: "Draft 3 to 5 concise banker-style credit research insights using only supplied PUBLIC evidence. Never infer a causal driver unless an evidence note states it. Do not make an underwriting decision. Use source IDs exactly as supplied. If data is missing, say so. Distinguish estimated EBITDA and leverage from covenant measures. Each insight must include at least one source ID unless it explicitly states missing data. No IBISWorld content is included or permitted.",
+          content: "Draft 3 to 5 concise banker-style credit research insights using only supplied PUBLIC evidence. Prioritize why revenue, cash flow, leverage, or liquidity changed when an earnings-transcript or other evidence note explicitly explains it. Never infer a causal driver unless an evidence note states it. Do not make an underwriting decision. Use source IDs exactly as supplied. If data is missing, say so. Distinguish estimated EBITDA and leverage from covenant measures. Each insight must include at least one source ID unless it explicitly states missing data. No IBISWorld content is included or permitted.",
         },
         {
           role: "user",
-          content: JSON.stringify({ metrics: publicMetrics, annualTrends: annual, sources: publicSources.map(({ id, title, url, publishedAt, note }) => ({ id, title, url, publishedAt, note })) }),
+          content: JSON.stringify({ metrics: publicMetrics, annualTrends: annual, sources: publicSources.map(({ id, title, kind, url, publishedAt, note }) => ({ id, title, kind, url, publishedAt, note })) }),
         },
       ],
       text: { format: zodTextFormat(InsightSchema, "credit_memo_insights") },

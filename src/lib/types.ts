@@ -2,7 +2,7 @@ export type Source = {
   id: string;
   title: string;
   url: string;
-  kind: "filing" | "public-news" | "company-release" | "industry" | "analyst-document" | "rating-agency" | "trends" | "company-website" | "funding" | "founder-profile";
+  kind: "filing" | "public-news" | "company-release" | "earnings-transcript" | "industry" | "analyst-document" | "rating-agency" | "trends" | "company-website" | "funding" | "founder-profile";
   access: "public" | "licensed";
   /** How this source entered the memo; independent from whether it is public or licensed. */
   provenance?: "sec-filing" | "publisher" | "analyst-supplied" | "google-trends-export" | "team1";
@@ -168,5 +168,5 @@ export type PublicSourceInput = {
   url: string;
   publishedAt?: string;
   note: string;
-  kind: "public-news" | "company-release";
+  kind: "public-news" | "company-release" | "earnings-transcript";
 };

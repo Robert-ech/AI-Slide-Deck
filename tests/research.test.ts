@@ -21,6 +21,16 @@ test("analyst-added news keeps its date and starts unreviewed", () => {
   assert.equal(source.access, "public");
 });
 
+test("dated earnings transcript notes remain source-linked and unreviewed", () => {
+  const [source] = normalizePublicSources([{
+    title: "Quarterly earnings call", url: "https://example.com/transcript", publishedAt: "2026-10-20",
+    note: "Management attributed the revenue change to a new project.", kind: "earnings-transcript",
+  }]);
+  assert.equal(source.kind, "earnings-transcript");
+  assert.equal(source.note, "Management attributed the revenue change to a new project.");
+  assert.equal(source.reviewed, false);
+});
+
 test("public research rejects undated, repeated, and credential-bearing sources", () => {
   const input = { title: "Article", url: "https://example.com/news", publishedAt: "2026-10-20", note: "Verified fact.", kind: "public-news" as const };
   assert.throws(() => normalizePublicSources([{ ...input, publishedAt: "" }]), /publication date/);

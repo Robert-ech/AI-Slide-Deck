@@ -89,7 +89,7 @@ export default function MemoView({ memo }: { memo: Memo }) {
   const performance = memo.insights.filter((insight) => ["performance", "context"].includes(insight.kind));
   const growth = memo.insights.filter((insight) => insight.kind === "growth");
   const credit = memo.insights.filter((insight) => ["credit", "risk"].includes(insight.kind));
-  const datedPublicEvidence = memo.sources.filter((source) => ["public-news", "company-release"].includes(source.kind) && source.access === "public" && source.publishedAt).slice(0, 2);
+  const datedPublicEvidence = memo.sources.filter((source) => ["public-news", "company-release", "earnings-transcript"].includes(source.kind) && source.access === "public" && source.publishedAt).slice(0, 2);
   const industrySource = memo.industry && memo.sources.find((source) => source.id === memo.industry?.sourceId);
   const citedIds = new Set([
     ...availableSlots.flatMap(({ metric }) => metric ? factSources(metric.inputFactIds, memo.facts) : []),
