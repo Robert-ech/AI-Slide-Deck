@@ -114,12 +114,17 @@ def get_json(url, params=None, headers=None):
     return r.json()
 
 
+def redact(text):
+    """Strip API keys from error text (requests puts the full URL, key included, in its messages)."""
+    return re.sub(r"(?i)\b(apikey|api_key|token|key)=[^&\s'\")]+", r"\1=***", str(text))
+
+
 def attempt(source, what, fn):
     """Run fn; on failure log an issue (e.g. paywalled endpoint) and return None."""
     try:
         return fn()
     except Exception as e:
-        ISSUES.append((source, what, f"{type(e).__name__}: {str(e)[:130]}"))
+        ISSUES.append((source, what, f"{type(e).__name__}: {redact(e)[:130]}"))
         return None
 
 
@@ -361,7 +366,7 @@ def collect_edgar():
     tickers = get_json("https://www.sec.gov/files/company_tickers.json", headers=H)
     m = next((v for v in tickers.values() if v["ticker"] == TICKER), None)
     if not m:
-        raise RuntimeError(f"{TICKER} not in EDGAR ticker map (non-US filer?)")
+        raise RuntimeError(f"{TICKER} not in EDGAR ticker map (delisted or acquired, ticker changed, or non-US filer)")
     CTX["name"] = clean_name(m["title"])
     CTX["cik"] = str(m["cik_str"]).zfill(10)
     time.sleep(0.2)
@@ -594,7 +599,11 @@ def collect_yfinance():
 
     px = attempt(S, "price history", lambda: yf.download(list(dict.fromkeys([TICKER, "SPY"])), period="1y",
                                                          auto_adjust=True, progress=False)["Close"].dropna())
-    if px is not None and TICKER in px:
+    stale = px is not None and TICKER in px and (len(px) < 120 or (date.today() - px.index[-1].date()).days > 10)
+    if stale:
+        ISSUES.append((S, "price history", f"only {len(px)} usable daily rows, last {str(px.index[-1])[:10]} "
+                                           "(delisted, acquired or newly listed?); beta, volatility, drawdown skipped"))
+    if px is not None and TICKER in px and not stale:
         CTX["px_end"] = str(px.index[-1])[:10]
         r = px.pct_change().dropna()
         if "SPY" in px and TICKER != "SPY":
@@ -673,7 +682,7 @@ def run(name, fn, env=None):
     try:
         fn()
     except Exception as e:
-        ISSUES.append((name, "collector", f"{type(e).__name__}: {str(e)[:150]}"))
+        ISSUES.append((name, "collector", f"{type(e).__name__}: {redact(e)[:150]}"))
     n, iss = count_rows(name), sum(1 for i in ISSUES if i[0] == name)
     STATUS[name] = f"FAILED" if n == 0 else (f"OK ({n} values)" if iss == 0 else f"PARTIAL ({n} values, {iss} issue(s))")
 
