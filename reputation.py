@@ -19,7 +19,7 @@ except ImportError:
 # STEP 1: FIND THE COMPANY AND ITS LATEST 10K filing
 
 ## Constants (unchanging variables through the entirety of the program's execution)
-SEC_HEADERS = {"User-Agent": os.getenv("SEC_USER_AGENT", "")} # gets the SEC EDWARD environment variable API key stored in the os
+SEC_HEADERS = {"User-Agent": os.getenv("SEC_USER_AGENT", "")} # gets the SEC Edgar environment variable API key stored locally in the .env file in the os 
 TIMEOUT = 30
 
 ## Now the two lookup functions:
@@ -27,7 +27,9 @@ TIMEOUT = 30
 def find_company(ticker):
     rows = requests.get("https://www.sec.gov/files/company_tickers.json", 
                         headers=SEC_HEADERS,
-                        timeout=TIMEOUT).json()
+                        timeout=TIMEOUT)
+    rows.raise_for_status()
+    rows = rows.json()
     for row in rows.values():
         if row['ticker'].upper() == ticker:
             return {
@@ -40,7 +42,9 @@ def find_company(ticker):
 def latest_10K(cik):
     subs = requests.get(f"https://data.sec.gov/submissions/CIK{cik}.json",
                         headers=SEC_HEADERS,
-                        timeout=TIMEOUT).json()
+                        timeout=TIMEOUT)
+    subs.raise_for_status()
+    subs = subs.json()
     recent = subs["filings"]["recent"]
     for i, form in enumerate(recent["form"]):
         if form == "10-K":
@@ -74,7 +78,7 @@ def headlines(name, limit=10):
     query = f'"{name}" when:90d'
     r = requests.get("https://news.google.com/rss/search", 
                      params={"q": query, 
-                             "h1": "en-US", 
+                             "hl": "en-US", 
                              "gl": "US", 
                              "ceid": "US:en"},
                      timeout=TIMEOUT)
@@ -96,14 +100,18 @@ def headlines(name, limit=10):
                     "date": published})
         if len(out) == limit:
             break
-        return out
+    return out
 
-# STEP 4: HAVE CLAUDE SUMMARIZE (OPTIONAL; MAYBE CAN USE A FREE LLM)
+# STEP 4: HAVE LLM SUMMARIZE (provider of the specific LLM set in .env)
+SYSTEM = ("You are a careful assistant to a bank credit analyst.""Use only the sources you are given. Reply with JSON only.")
 
 def summarize(company, legal, news):
-    if not os.getenv("ANTHROPIC_API_KEY"):
+    key = os.getenv("LLM_API_Key")
+    if not key:
         return None
-    import anthropic
+    from openai import OpenAI
+    client = OpenAI(api_key=key)
+    base_url = os.getenv("LLM_BASE_URL") or None
     lines = "\n".join(f'[news-{i + 1}] {n["date"]} {n["outlet"]}: {n["title"]}' for i, n in enumerate(news))
     prompt = f"""You are helping a bank credit analyst judge {company['name']}'s reputation.
         Use only the text below. [10k] is Item 3 Legal Proceedings from the latest 10-K.
@@ -121,12 +129,16 @@ def summarize(company, legal, news):
         Low = nothing material; Medium = notable but not material;
         High = material litigation, enforcement, fraud, or distress."""
 
-    msg = anthropic.ANTHROPIC().message.create(
-        model="claude-sonnet-5-5",
-        max_tokens=800,
-        messages=[{"role": "user", "content": prompt}]
+    resp = client.chat.completions.create(               
+        model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
+        messages=[{"role": "system", "content": SYSTEM},
+                  {"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0,
+        max_tokens=2000,
     )
-    raw = msg.content[0].text.strip().removeprefix("'''json").removesuffix("'''")
+    return json.loads(resp.choices[0].message.content) 
+    raw = msg.content[0].text.strip().removeprefix("```json").removesuffix("```").strip()
     return json.loads(raw)
 
 # STEP 5: WRITE THE JSON AND WIRE IT ALL TOGETHER
@@ -137,7 +149,7 @@ def build(tenk, legal, news, summary):
     summary = summary or {}
     tags = summary.get("tags", {})
     headlines_out = [{"date": n["date"],
-                      "tag": tags.get(f"news={i + 1}", "-"),
+                      "tag": tags.get(f"news-{i + 1}", "-"),
                       "title": n["title"],
                       "url": n["url"]} for i, n in enumerate(news)]
     flag = {
@@ -149,7 +161,7 @@ def build(tenk, legal, news, summary):
         "spread_pct": None, 
         "link": tenk["url"]
     }
-    text = summary.get("summary") or "Not summarized: no ANTHROPIC_API_KEY set."
+    text = summary.get("summary") or "Not summarized: no LLM_API_KEY set."
     return {
         "reputation_flag": flag,
         "headlines": headlines_out,
