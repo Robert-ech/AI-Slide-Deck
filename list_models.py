@@ -1,6 +1,6 @@
 """
 A short python script to list the Google Gemini models which 
-the .env Gemini API key can reach to.
+the .env Gemini API key can reach.
 """
 
 import os

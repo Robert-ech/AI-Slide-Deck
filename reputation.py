@@ -6,9 +6,9 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-
 import requests
 from bs4 import BeautifulSoup
+
 
 try:
     from dotenv import load_dotenv
@@ -106,12 +106,12 @@ def headlines(name, limit=10):
 SYSTEM = ("You are a careful assistant to a bank credit analyst.""Use only the sources you are given. Reply with JSON only.")
 
 def summarize(company, legal, news):
-    key = os.getenv("LLM_API_Key")
+    key = os.getenv("LLM_API_KEY")
     if not key:
         return None
     from openai import OpenAI
-    client = OpenAI(api_key=key)
-    base_url = os.getenv("LLM_BASE_URL") or None
+    client = OpenAI(api_key=key,
+                    base_url = os.getenv("LLM_BASE_URL") or None)
     lines = "\n".join(f'[news-{i + 1}] {n["date"]} {n["outlet"]}: {n["title"]}' for i, n in enumerate(news))
     prompt = f"""You are helping a bank credit analyst judge {company['name']}'s reputation.
         Use only the text below. [10k] is Item 3 Legal Proceedings from the latest 10-K.
@@ -129,17 +129,32 @@ def summarize(company, legal, news):
         Low = nothing material; Medium = notable but not material;
         High = material litigation, enforcement, fraud, or distress."""
 
-    resp = client.chat.completions.create(               
-        model=os.getenv("LLM_MODEL", "gemini-2.5-flash"),
-        messages=[{"role": "system", "content": SYSTEM},
-                  {"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-        max_tokens=2000,
-    )
-    return json.loads(resp.choices[0].message.content) 
-    raw = msg.content[0].text.strip().removeprefix("```json").removesuffix("```").strip()
-    return json.loads(raw)
+    try:
+        resp = client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", "gemini-3.5-flash-lite"),
+            messages=[
+                {
+                "role": "system", "content": SYSTEM},
+                {
+                "role": "user", "content": prompt
+                }],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=2000,
+            reasoning_effort="low"
+        )
+        result = json.loads(resp.choices[0].message.content)
+    except Exception as e:
+        print(f"LLM summary skipped: {type(e).__name__}: {e}", file=sys.stderr)
+        return None
+
+    # Don't trust the shape blindly: check the one field the flag depends on
+    if result.get("level") not in ("Low", "Medium", "High"):
+        print(f"LLM gave an unexpected level: {result.get('level')!r}",
+              file=sys.stderr)
+        result["level"] = None
+
+    return result
 
 # STEP 5: WRITE THE JSON AND WIRE IT ALL TOGETHER
 
