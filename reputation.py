@@ -103,7 +103,7 @@ def headlines(name, limit=10):
     return out
 
 # STEP 4: HAVE LLM SUMMARIZE (provider of the specific LLM set in .env)
-SYSTEM = ("You are a careful assistant to a bank credit analyst.""Use only the sources you are given. Reply with JSON only.")
+SYSTEM = ("You are a careful assistant to a bank credit analyst. ""Use only the sources you are given. Reply with JSON only.")
 
 def summarize(company, legal, news):
     key = os.getenv("LLM_API_KEY")
@@ -111,7 +111,9 @@ def summarize(company, legal, news):
         return None
     from openai import OpenAI
     client = OpenAI(api_key=key,
-                    base_url = os.getenv("LLM_BASE_URL") or None)
+                    base_url = os.getenv("LLM_BASE_URL") or None,
+                    timeout=60,
+                    max_retries=2)
     lines = "\n".join(f'[news-{i + 1}] {n["date"]} {n["outlet"]}: {n["title"]}' for i, n in enumerate(news))
     prompt = f"""You are helping a bank credit analyst judge {company['name']}'s reputation.
         Use only the text below. [10k] is Item 3 Legal Proceedings from the latest 10-K.
