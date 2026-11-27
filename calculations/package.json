@@ -1,0 +1,15 @@
+{
+  "name": "ds3-financial-calculations-comparison",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "calculate": "tsx scripts/calculate.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0"
+  }
+}

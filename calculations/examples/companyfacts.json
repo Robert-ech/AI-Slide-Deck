@@ -1,0 +1,180 @@
+{
+  "cik": 1234,
+  "entityName": "Fictional comparison company \u2014 not real company data",
+  "facts": {
+    "us-gaap": {
+      "Revenues": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "filed": "2025-02-01",
+              "accn": "0000001234-25-000001",
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY",
+              "val": 100000000
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 120000000
+            }
+          ]
+        }
+      },
+      "CostOfRevenue": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "filed": "2025-02-01",
+              "accn": "0000001234-25-000001",
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY",
+              "val": 60000000
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 72000000
+            }
+          ]
+        }
+      },
+      "OperatingIncomeLoss": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "filed": "2025-02-01",
+              "accn": "0000001234-25-000001",
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY",
+              "val": 20000000
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 24000000
+            }
+          ]
+        }
+      },
+      "DepreciationDepletionAndAmortization": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "filed": "2025-02-01",
+              "accn": "0000001234-25-000001",
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY",
+              "val": 10000000
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 12000000
+            }
+          ]
+        }
+      },
+      "CashAndCashEquivalentsAtCarryingValue": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 10000000
+            }
+          ]
+        }
+      },
+      "ShortTermBorrowings": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 3000000
+            }
+          ]
+        }
+      },
+      "LongTermDebtCurrent": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 5000000
+            }
+          ]
+        }
+      },
+      "LongTermDebtNoncurrent": {
+        "label": "Fictional example",
+        "units": {
+          "USD": [
+            {
+              "end": "2025-12-31",
+              "filed": "2026-02-01",
+              "accn": "0000001234-26-000001",
+              "form": "10-K",
+              "fy": 2025,
+              "fp": "FY",
+              "val": 15000000
+            }
+          ]
+        }
+      }
+    }
+  }
+}

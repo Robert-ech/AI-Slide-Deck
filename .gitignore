@@ -1,2 +1,16 @@
 .env
 *.json
+.env.*
+!.env.example
+node_modules/
+calculations/output/
+*.tsbuildinfo
+*.log
+.DS_Store
+# Standalone calculation package metadata and explicitly fictional examples.
+!calculations/package.json
+!calculations/package-lock.json
+!calculations/tsconfig.json
+!calculations/SOURCE_MANIFEST.json
+!calculations/examples/companyfacts.json
+!calculations/examples/submissions.json

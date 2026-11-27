@@ -1,0 +1,13 @@
+{
+  "preparedAt": "2026-11-26",
+  "sourceCommit": "8980ef693e243b285ab1a5084f2a7e30723ae67e",
+  "unchangedSourceFiles": {
+    "src/lib/financials.ts": "2a437110ffe9c19f5cc595316ad390d3d474b4c50082635d6c2d8fa051f8b040",
+    "tests/financials.test.ts": "5fcc219097b70dc4f86b9f0896d46183a37fb7c86c042ab9ff6a9743f32a5cc6"
+  },
+  "packagingChanges": [
+    "Reduced types.ts to the four required data types.",
+    "Reduced sec.ts to input types and the unchanged filingUrl helper.",
+    "Added an offline command-line runner and fictional input examples."
+  ]
+}
